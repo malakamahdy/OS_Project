@@ -8,6 +8,12 @@ A web dashboard for monitoring containerized application security. Built with Re
 
 Make sure you have Node.js v20.19+ or v22.12+ and Docker Desktop installed and running.
 
+Also, you need to install Trivy:
+```bash
+brew install trivy
+trivy image --download-db-only
+```
+
 **Frontend:**
 ```bash
 npm install
