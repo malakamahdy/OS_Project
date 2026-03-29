@@ -41,7 +41,35 @@ function useVulnerabilities() {
   return { vulnerabilities, loading, error: null };
 }
 
-function useAlerts() { return { alerts: [], loading: false, error: null }; }
+function useAlerts() {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    fetch('http://localhost:3002/api/alerts')
+      .then(res => res.json())
+      .then(data => { setAlerts(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 10000); // poll every 10s
+    return () => clearInterval(interval);
+  }, []);
+
+  const acknowledge = (id) => {
+    fetch(`http://localhost:3002/api/alerts/${id}/acknowledge`, { method: 'POST' })
+      .then(() => load());
+  };
+
+  const acknowledgeAll = () => {
+    fetch('http://localhost:3002/api/alerts/acknowledge-all', { method: 'POST' })
+      .then(() => load());
+  };
+
+  return { alerts, loading, error: null, acknowledge, acknowledgeAll };
+}
 function useCompliance() { return { compliance: [], loading: false, error: null }; }
 function useSecurityEvents() { return { events: [], loading: false, error: null }; }
 
@@ -294,8 +322,13 @@ function Sidebar({ active, onNav }) {
 // TOPBAR
 // ─────────────────────────────────────────────
 
-function Topbar({ clusterName, containerCount, alertCount, onScan, onExport }) {
+const ALERT_ICON_MAP = { critical: XCircle, warning: AlertCircle, info: Info };
+const ALERT_COLOR_MAP = { critical: C.red, warning: C.amber, info: C.cyan };
+
+function Topbar({ clusterName, containerCount, alertCount, alerts, onScan, onExport, onAcknowledge, onAcknowledgeAll }) {
+  const [open, setOpen] = useState(false);
   const date = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 28px", borderBottom: `1px solid ${C.border}`, background: C.bg, position: "sticky", top: 0, zIndex: 10 }}>
       <div>
@@ -308,6 +341,7 @@ function Topbar({ clusterName, containerCount, alertCount, onScan, onExport }) {
           <Mono size={10} color={C.textDim}>{date.toUpperCase()}</Mono>
         </div>
       </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={onExport} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: "pointer", letterSpacing: "0.05em" }}>
           <Download size={12} strokeWidth={1.5} /> EXPORT
@@ -315,15 +349,72 @@ function Topbar({ clusterName, containerCount, alertCount, onScan, onExport }) {
         <button onClick={onScan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
           <Play size={11} strokeWidth={2} /> RUN SCAN
         </button>
-        <div style={{ position: "relative", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border2}`, borderRadius: 5, cursor: "pointer" }}>
-          <Bell size={15} color={C.text} strokeWidth={1.5} />
-          {alertCount > 0 && (
-            <span style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, background: C.red, borderRadius: "50%", fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: mono, color: "#fff", fontWeight: 700 }}>
-              {alertCount}
-            </span>
+
+        {/* Bell with dropdown */}
+        <div style={{ position: "relative" }}>
+          <div
+            onClick={() => setOpen(o => !o)}
+            style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${open ? C.cyan : C.border2}`, borderRadius: 5, cursor: "pointer", background: open ? `${C.cyan}10` : "transparent", transition: "all 0.12s" }}
+          >
+            <Bell size={15} color={open ? C.cyan : C.text} strokeWidth={1.5} />
+            {alertCount > 0 && (
+              <span style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, background: C.red, borderRadius: "50%", fontSize: 9, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: mono, color: "#fff", fontWeight: 700 }}>
+                {alertCount}
+              </span>
+            )}
+          </div>
+
+          {/* Dropdown */}
+          {open && (
+            <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 360, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 8px 32px rgba(0,0,0,0.5)", zIndex: 100, overflow: "hidden" }}>
+              {/* Header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright }}>
+                  Active Alerts {alertCount > 0 && <span style={{ fontFamily: mono, fontSize: 10, color: C.red, marginLeft: 6 }}>{alertCount}</span>}
+                </div>
+                {alertCount > 0 && (
+                  <button onClick={() => { onAcknowledgeAll(); setOpen(false); }} style={{ fontFamily: mono, fontSize: 9, color: C.textDim, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 3, padding: "2px 8px", cursor: "pointer", letterSpacing: "0.08em" }}>
+                    CLEAR ALL
+                  </button>
+                )}
+              </div>
+
+              {/* Alert list */}
+              <div style={{ maxHeight: 340, overflowY: "auto" }}>
+                {alerts.length === 0 ? (
+                  <div style={{ padding: "28px 16px", textAlign: "center" }}>
+                    <CheckCircle size={20} color={C.border2} strokeWidth={1} style={{ margin: "0 auto 8px", display: "block" }} />
+                    <Mono size={9} color={C.textDim}>NO ACTIVE ALERTS</Mono>
+                  </div>
+                ) : alerts.map(a => {
+                  const color = ALERT_COLOR_MAP[a.severity] || C.textDim;
+                  const Icon = ALERT_ICON_MAP[a.severity] || Info;
+                  return (
+                    <div key={a.id} style={{ display: "flex", gap: 10, padding: "12px 16px", borderBottom: `1px solid ${C.border}88`, alignItems: "flex-start" }}>
+                      <Icon size={13} color={color} strokeWidth={1.5} style={{ marginTop: 2, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright, marginBottom: 2 }}>{a.title}</div>
+                        <div style={{ fontFamily: sans, fontSize: 11, color: C.text, lineHeight: 1.4 }}>{a.description}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                          <Clock size={9} color={C.textDim} />
+                          <Mono size={9}>{a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : "—"}</Mono>
+                          <span style={{ fontFamily: mono, fontSize: 8, color: color, letterSpacing: "0.1em" }}>{a.severity?.toUpperCase()}</span>
+                        </div>
+                      </div>
+                      <button onClick={() => onAcknowledge(a.id)} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 3, padding: "2px 7px", fontFamily: mono, fontSize: 8, color: C.textDim, cursor: "pointer", flexShrink: 0, marginTop: 2, letterSpacing: "0.08em" }}>
+                        DISMISS
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Click outside to close */}
+      {open && <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />}
     </div>
   );
 }
@@ -332,7 +423,7 @@ function Topbar({ clusterName, containerCount, alertCount, onScan, onExport }) {
 // PAGE: DASHBOARD
 // ─────────────────────────────────────────────
 
-function DashboardPage({ containers, vulnerabilities, alerts, events, scans, compliance, stats, ls, lv, lcont, lev, la, lcomp, lsc, onNav }) {
+function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, acknowledge, events, scans, compliance, stats, ls, lv, lcont, lev, la, lcomp, lsc, onNav }) {
   const max = events.length ? Math.max(...events.map(e => Math.max(e.networkAnomalies || 0, e.accessViolations || 0)), 1) : 1;
   const previewVulns = vulnerabilities.slice(0, 5);
 
@@ -420,7 +511,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, events, scans, com
       {/* ROW 3 */}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Panel title="Live Alerts" icon={Bell} action="VIEW ALL" onAction={() => onNav("alerts")}>
+          <Panel title="Live Alerts" icon={Bell} action="CLEAR ALL" onAction={acknowledgeAll}>
             {la ? <Loading /> : alerts.length === 0 ? <EmptyState icon={CheckCircle} message="NO ACTIVE ALERTS" /> : (
               <div>
                 {alerts.slice(0, 3).map(a => {
@@ -572,6 +663,75 @@ function MonitorPage({ containers, loading, onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// PAGE: ALERTS
+// ─────────────────────────────────────────────
+
+function AlertsPage({ alerts, loading, onBack, onAcknowledge, onAcknowledgeAll }) {
+  const [filter, setFilter] = useState("all");
+  const filtered = filter === "all" ? alerts : alerts.filter(a => a.severity === filter);
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Live Alerts</div>
+        {alerts.length > 0 && (
+          <button onClick={onAcknowledgeAll} style={{ marginLeft: "auto", fontFamily: mono, fontSize: 9, color: C.textDim, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 3, padding: "4px 12px", cursor: "pointer", letterSpacing: "0.08em" }}>
+            CLEAR ALL
+          </button>
+        )}
+      </div>
+
+      {/* Filter tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["all", "critical", "warning", "info"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{ fontFamily: mono, fontSize: 9, padding: "5px 13px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.1em", textTransform: "uppercase", background: filter === f ? `${C.cyan}18` : "transparent", color: filter === f ? C.cyan : C.textDim, border: `1px solid ${filter === f ? C.cyan : C.border}`, transition: "all 0.12s" }}>
+            {f} {f !== "all" && `(${alerts.filter(a => a.severity === f).length})`}
+          </button>
+        ))}
+      </div>
+
+      <Panel title="All Alerts" icon={Bell}>
+        {loading ? <Loading /> : filtered.length === 0 ? (
+          <EmptyState icon={CheckCircle} message="NO ACTIVE ALERTS" />
+        ) : (
+          filtered.map(a => {
+            const color = ALERT_COLOR[a.severity] || C.textDim;
+            const Icon = ALERT_ICON[a.severity] || Info;
+            return (
+              <div key={a.id} style={{ display: "flex", gap: 14, padding: "16px 18px", borderBottom: `1px solid ${C.border}`, alignItems: "flex-start", transition: "background 0.1s" }}
+                onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <Icon size={15} color={color} strokeWidth={1.5} style={{ marginTop: 2, flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: C.textBright, marginBottom: 4 }}>{a.title}</div>
+                  <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 6 }}>{a.description}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <Clock size={10} color={C.textDim} />
+                      <Mono size={9}>{a.timestamp ? new Date(a.timestamp).toLocaleString() : "—"}</Mono>
+                    </div>
+                    <span style={{ fontFamily: mono, fontSize: 8, color, letterSpacing: "0.12em", background: `${color}18`, border: `1px solid ${color}44`, padding: "1px 6px", borderRadius: 3 }}>
+                      {a.severity?.toUpperCase()}
+                    </span>
+                    {a.source && <Mono size={9} color={C.textDim}>SOURCE: {a.source}</Mono>}
+                  </div>
+                </div>
+                <button onClick={() => onAcknowledge(a.id)} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 4, padding: "4px 10px", fontFamily: mono, fontSize: 9, color: C.textDim, cursor: "pointer", flexShrink: 0, letterSpacing: "0.08em" }}>
+                  DISMISS
+                </button>
+              </div>
+            );
+          })
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -601,14 +761,13 @@ export default function Dashboard() {
 
   const { containers, loading: lcont } = useContainers();
   const { vulnerabilities, loading: lv } = useVulnerabilities();
-  const { alerts, loading: la }          = useAlerts();
+  const { alerts, loading: la, acknowledge, acknowledgeAll } = useAlerts();
   const { compliance, loading: lcomp }   = useCompliance();
   const { events, loading: lev }         = useSecurityEvents();
   const { stats, loading: ls }           = useStats();
   const { scans, loading: lsc }          = useScanHistory();
 
   const PAGE_TITLES = {
-    alerts:     { title: "Alerts",         Icon: Bell },
     secrets:    { title: "Secrets Scan",   Icon: Lock },
     compliance: { title: "Compliance",     Icon: CheckCircle },
     reports:    { title: "Reports",        Icon: FileText },
@@ -620,7 +779,9 @@ export default function Dashboard() {
   function renderPage() {
     switch (activeNav) {
       case "dashboard":
-        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} events={events} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} lev={lev} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} />;
+        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} events={events} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} lev={lev} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} />;
+      case "alerts":
+        return <AlertsPage alerts={alerts} loading={la} onBack={() => setActiveNav("dashboard")} onAcknowledge={acknowledge} onAcknowledgeAll={acknowledgeAll} />;
       case "vulns":
         return <VulnsPage vulnerabilities={vulnerabilities} loading={lv} onBack={() => setActiveNav("dashboard")} />;
       case "monitor":
@@ -639,8 +800,11 @@ export default function Dashboard() {
           clusterName={null}
           containerCount={containers.length}
           alertCount={alerts.filter(a => !a.acknowledged).length}
+          alerts={alerts}
           onScan={() => setActiveNav("vulns")}
           onExport={() => console.log("TODO: export")}
+          onAcknowledge={acknowledge}
+          onAcknowledgeAll={acknowledgeAll}
         />
         {renderPage()}
       </div>
