@@ -33,44 +33,6 @@ OS_Project/
 
 ---
 
-## How to wire up your data
-
-All data lives in custom hooks at the top of `Dashboard.jsx`. Each one returns `{ data, loading, error }` and has a comment showing what shape the data should be.
-
-To connect a real backend, find the hook and replace the empty array with your fetch call. Example:
-
-```js
-function useContainers() {
-  const [containers, setContainers] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch('/api/containers')
-      .then(res => res.json())
-      .then(data => {
-        setContainers(data);
-        setLoading(false);
-      });
-  }, []);
-
-  return { containers, loading, error: null };
-}
-```
-
-The hooks and the expected data shapes:
-
-| Hook | What it feeds | Expected fields |
-|---|---|---|
-| `useContainers` | Container health list | `id, name, image, tag, env, cpuPct, memPct, health` |
-| `useVulnerabilities` | Vuln table | `id, cveId, container, package, version, severity, cvss, status` |
-| `useAlerts` | Alerts feed | `id, title, description, severity, timestamp, acknowledged` |
-| `useCompliance` | Compliance bars | `id, name, standard, passPct, passCount, totalCount` |
-| `useSecurityEvents` | 24h chart | `hour, networkAnomalies, accessViolations` |
-| `useStats` | Stat cards | `totalContainers, criticalVulns, complianceScore, threatsBlocked` |
-| `useScanHistory` | Scan log | `id, target, timestamp, type, vulnCount, status` |
-
----
-
 ## Dependencies
 
 - [React](https://react.dev/)
@@ -78,7 +40,3 @@ The hooks and the expected data shapes:
 - [lucide-react](https://lucide.dev/) — icons
 
 ---
-
-## Team
-
-Add your names here.
