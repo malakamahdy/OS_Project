@@ -1,4 +1,4 @@
-# OS Project — Container Security Monitoring Platform
+# ⇨ Container Security Monitoring Platform ⇦
 
 A web dashboard for monitoring containerized application security. Built with React + Vite on the frontend and Node.js + Express on the backend, connected to Docker via the Docker Engine API.
 
