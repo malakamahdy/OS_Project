@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Shield, Activity, AlertTriangle, CheckCircle, Radio,
   Search, Bell, Download, Play, Settings, Users, FileText,
@@ -12,8 +12,23 @@ import {
 // ─────────────────────────────────────────────
 
 function useContainers() {
-  return { containers: [], loading: false, error: null };
-  // Expected shape: Array<{ id, name, image, tag, env, status, cpuPct, memPct, health: 'ok'|'warn'|'crit' }>
+  const [containers, setContainers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const load = () => {
+      fetch('http://localhost:3002/api/containers')
+        .then(res => res.json())
+        .then(data => { setContainers(data); setLoading(false); })
+        .catch(err => { setError(err.message); setLoading(false); });
+    };
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return { containers, loading, error };
 }
 function useVulnerabilities() {
   return { vulnerabilities: [], loading: false, error: null };
@@ -32,8 +47,22 @@ function useSecurityEvents() {
   // Expected shape: Array<{ hour, networkAnomalies, accessViolations }>
 }
 function useStats() {
-  return { stats: null, loading: false, error: null };
-  // Expected shape: { totalContainers, criticalVulns, complianceScore, threatsBlocked }
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = () => {
+      fetch('http://localhost:3002/api/stats')
+        .then(res => res.json())
+        .then(data => { setStats(data); setLoading(false); })
+        .catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return { stats, loading, error: null };
 }
 function useScanHistory() {
   return { scans: [], loading: false, error: null };
