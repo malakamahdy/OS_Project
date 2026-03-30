@@ -1,32 +1,100 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Shield, Activity, AlertTriangle, CheckCircle,
   Search, Bell, Download, Play, Settings, Users, FileText,
   Lock, BarChart2, Box, Clock, Cpu, Database,
   XCircle, AlertCircle, Info, Layers, Terminal,
-  List, ChevronLeft
+  List, ChevronLeft, Wifi, WifiOff
 } from "lucide-react";
+
+// ─────────────────────────────────────────────
+// SOCKET.IO — real-time connection to backend
+// ─────────────────────────────────────────────
+
+function useSocket() {
+  const [connected, setConnected] = useState(false);
+  const socketRef = useRef(null);
+  const pendingListeners = useRef({});
+
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
+    script.onload = () => {
+      const socket = window.io('http://localhost:3002');
+      socketRef.current = socket;
+      socket.on('connect', () => { setConnected(true); console.log('[Socket] Connected'); });
+      socket.on('disconnect', () => { setConnected(false); console.log('[Socket] Disconnected'); });
+      Object.entries(pendingListeners.current).forEach(([ev, cb]) => socket.on(ev, cb));
+    };
+    document.head.appendChild(script);
+    return () => {
+      if (socketRef.current) socketRef.current.disconnect();
+      if (document.head.contains(script)) document.head.removeChild(script);
+    };
+  }, []);
+
+  const on = (event, cb) => {
+    pendingListeners.current[event] = cb;
+    if (socketRef.current) socketRef.current.on(event, cb);
+  };
+
+  return { connected, on };
+}
 
 // ─────────────────────────────────────────────
 // DATA HOOKS
 // ─────────────────────────────────────────────
 
-function useContainers() {
+function useContainers(socket) {
   const [containers, setContainers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   useEffect(() => {
-    const load = () => {
-      fetch('http://localhost:3002/api/containers')
-        .then(res => res.json())
-        .then(data => { setContainers(data); setLoading(false); })
-        .catch(err => { setError(err.message); setLoading(false); });
-    };
-    load();
-    const interval = setInterval(load, 5000);
+    fetch('http://localhost:3002/api/containers')
+      .then(res => res.json())
+      .then(data => { setContainers(data); setLoading(false); })
+      .catch(() => setLoading(false));
+    socket.on('containers:update', data => { setContainers(data); setLoading(false); });
+    const interval = setInterval(() => {
+      fetch('http://localhost:3002/api/containers').then(r => r.json()).then(setContainers).catch(() => {});
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
-  return { containers, loading, error };
+  return { containers, loading, error: null };
+}
+
+function useAgents(socket) {
+  const [agents, setAgents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch('http://localhost:3002/api/agents')
+      .then(res => res.json())
+      .then(data => { setAgents(data); setLoading(false); })
+      .catch(() => setLoading(false));
+    socket.on('agents:update', data => { setAgents(data); setLoading(false); });
+    const interval = setInterval(() => {
+      fetch('http://localhost:3002/api/agents').then(r => r.json()).then(setAgents).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+  return { agents, loading };
+}
+
+function useAlerts(socket) {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const load = () => {
+    fetch('http://localhost:3002/api/alerts')
+      .then(res => res.json())
+      .then(data => { setAlerts(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(() => {
+    load();
+    socket.on('alerts:update', data => { setAlerts(data); setLoading(false); });
+  }, []);
+  const acknowledge = (id) => fetch(`http://localhost:3002/api/alerts/${id}/acknowledge`, { method: 'POST' }).then(load);
+  const acknowledgeAll = () => fetch('http://localhost:3002/api/alerts/acknowledge-all', { method: 'POST' }).then(load);
+  return { alerts, loading, error: null, acknowledge, acknowledgeAll };
 }
 
 function useVulnerabilities() {
@@ -41,50 +109,27 @@ function useVulnerabilities() {
   return { vulnerabilities, loading, error: null };
 }
 
-function useAlerts() {
-  const [alerts, setAlerts] = useState([]);
+function useCompliance() {
+  const [compliance, setCompliance] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const load = () => {
-    fetch('http://localhost:3002/api/alerts')
-      .then(res => res.json())
-      .then(data => { setAlerts(data); setLoading(false); })
-      .catch(() => setLoading(false));
-  };
-
   useEffect(() => {
+    const load = () => fetch('http://localhost:3002/api/compliance').then(r => r.json()).then(d => { setCompliance(d.results || []); setLoading(false); }).catch(() => setLoading(false));
     load();
-    const interval = setInterval(load, 10000); // poll every 10s
+    const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
   }, []);
-
-  const acknowledge = (id) => {
-    fetch(`http://localhost:3002/api/alerts/${id}/acknowledge`, { method: 'POST' })
-      .then(() => load());
-  };
-
-  const acknowledgeAll = () => {
-    fetch('http://localhost:3002/api/alerts/acknowledge-all', { method: 'POST' })
-      .then(() => load());
-  };
-
-  return { alerts, loading, error: null, acknowledge, acknowledgeAll };
+  return { compliance, loading, error: null };
 }
-function useCompliance() { return { compliance: [], loading: false, error: null }; }
+
 function useSecurityEvents() { return { events: [], loading: false, error: null }; }
 
 function useStats() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const load = () => {
-      fetch('http://localhost:3002/api/stats')
-        .then(res => res.json())
-        .then(data => { setStats(data); setLoading(false); })
-        .catch(() => setLoading(false));
-    };
+    const load = () => fetch('http://localhost:3002/api/stats').then(r => r.json()).then(d => { setStats(d); setLoading(false); }).catch(() => setLoading(false));
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, []);
   return { stats, loading, error: null };
@@ -325,7 +370,7 @@ function Sidebar({ active, onNav }) {
 const ALERT_ICON_MAP = { critical: XCircle, warning: AlertCircle, info: Info };
 const ALERT_COLOR_MAP = { critical: C.red, warning: C.amber, info: C.cyan };
 
-function Topbar({ clusterName, containerCount, alertCount, alerts, onScan, onExport, onAcknowledge, onAcknowledgeAll }) {
+function Topbar({ clusterName, containerCount, alertCount, alerts, connected, onScan, onExport, onAcknowledge, onAcknowledgeAll }) {
   const [open, setOpen] = useState(false);
   const date = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 
@@ -334,7 +379,14 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, onScan, onExp
       <div>
         <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright, letterSpacing: "-0.01em" }}>Security Overview</div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 4 }}>
-          <Mono size={10} color={C.textDim}>{clusterName ? `CLUSTER / ${clusterName}` : "NO CLUSTER CONNECTED"}</Mono>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            {connected
+              ? <Wifi size={10} color={C.green} strokeWidth={2} />
+              : <WifiOff size={10} color={C.red} strokeWidth={2} />}
+            <Mono size={10} color={connected ? C.green : C.red}>{connected ? "LIVE" : "OFFLINE"}</Mono>
+          </div>
+          <span style={{ width: 1, height: 10, background: C.border2 }} />
+          <Mono size={10} color={C.textDim}>{clusterName ? clusterName.toUpperCase() : "NO AGENTS"}</Mono>
           <span style={{ width: 1, height: 10, background: C.border2 }} />
           <Mono size={10} color={C.textDim}>{containerCount ?? 0} CONTAINERS</Mono>
           <span style={{ width: 1, height: 10, background: C.border2 }} />
@@ -618,7 +670,7 @@ function VulnsPage({ vulnerabilities, loading, onBack }) {
 // PAGE: LIVE MONITOR
 // ─────────────────────────────────────────────
 
-function MonitorPage({ containers, loading, onBack }) {
+function MonitorPage({ containers, agents, loading, onBack }) {
   return (
     <div style={{ padding: "24px 28px", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
@@ -633,6 +685,37 @@ function MonitorPage({ containers, loading, onBack }) {
         </div>
       </div>
 
+      {/* Agents panel */}
+      {agents.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Panel title="Monitoring Agents" icon={Activity}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 1, background: C.border }}>
+              {agents.map(a => (
+                <div key={a.agentId} style={{ background: C.surface, padding: "16px 18px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.status === "online" ? C.green : C.red, boxShadow: `0 0 6px ${a.status === "online" ? C.green : C.red}`, flexShrink: 0 }} />
+                    <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: C.textBright }}>{a.agentLabel}</div>
+                    <span style={{ marginLeft: "auto", fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: a.status === "online" ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)", color: a.status === "online" ? C.green : C.red, border: `1px solid ${a.status === "online" ? C.green + "44" : C.red + "44"}` }}>
+                      {a.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 16 }}>
+                    <div><Mono size={9}>CONTAINERS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.containerCount ?? "—"}</div></div>
+                    {a.hostInfo && <>
+                      <div><Mono size={9}>CPUS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.cpuCount}</div></div>
+                      <div><Mono size={9}>MEM FREE</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.freeMemMb}MB</div></div>
+                    </>}
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <Mono size={9} color={C.textDim}>LAST SEEN: {a.lastSeen ? new Date(a.lastSeen).toLocaleTimeString() : "—"}</Mono>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      )}
+
       <Panel title="All Containers" icon={Box}>
         {loading ? <Loading /> : containers.length === 0 ? <EmptyState icon={Box} message="NO CONTAINERS DETECTED" /> :
           containers.map(c => (
@@ -642,7 +725,7 @@ function MonitorPage({ containers, loading, onBack }) {
               <HealthDot health={c.health} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, fontWeight: 600 }}>{c.name || c.id}</div>
-                <Mono size={10} color={C.textDim}>{c.image}:{c.tag} · {c.env} · {c.status}</Mono>
+                <Mono size={10} color={C.textDim}>{c.image}:{c.tag} · {c.agentLabel || c.env} · {c.status}</Mono>
               </div>
               <div style={{ display: "flex", gap: 24 }}>
                 <div style={{ textAlign: "right" }}>
@@ -732,6 +815,94 @@ function AlertsPage({ alerts, loading, onBack, onAcknowledge, onAcknowledgeAll }
 }
 
 // ─────────────────────────────────────────────
+// PAGE: COMPLIANCE
+// ─────────────────────────────────────────────
+
+function CompliancePage({ compliance, loading, onBack }) {
+  const [expanded, setExpanded] = useState(null);
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Compliance</div>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>CIS DOCKER BENCHMARK</Mono>
+      </div>
+
+      {loading ? <div style={{ background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}><Loading /></div> :
+        compliance.length === 0 ? (
+          <div style={{ background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}>
+            <EmptyState icon={CheckCircle} message="NO COMPLIANCE DATA" />
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {compliance.map(cat => {
+              const pct = cat.passPct ?? 0;
+              const color = pct >= 85 ? C.green : pct >= 60 ? C.amber : C.red;
+              const isOpen = expanded === cat.id;
+
+              return (
+                <div key={cat.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                  {/* Category header */}
+                  <div onClick={() => setExpanded(isOpen ? null : cat.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", cursor: "pointer", transition: "background 0.1s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontFamily: sans, fontSize: 14, fontWeight: 600, color: C.textBright, marginBottom: 4 }}>{cat.name}</div>
+                      <Mono size={9} color={C.textDim}>{cat.standard}</Mono>
+                    </div>
+                    <div style={{ width: 180 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                        <Mono size={9} color={C.textDim}>{cat.passCount}/{cat.totalCount} CHECKS</Mono>
+                        <Mono size={11} color={color}>{pct}%</Mono>
+                      </div>
+                      <div style={{ height: 5, background: C.surface2, borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3, transition: "width 0.8s ease" }} />
+                      </div>
+                    </div>
+                    <div style={{ fontFamily: mono, fontSize: 10, color: C.textDim, marginLeft: 8 }}>{isOpen ? "▲" : "▼"}</div>
+                  </div>
+
+                  {/* Expanded check list */}
+                  {isOpen && (
+                    <div style={{ borderTop: `1px solid ${C.border}` }}>
+                      {(cat.checks || []).map((chk, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 20px", borderBottom: `1px solid ${C.border}88` }}>
+                          {chk.pass
+                            ? <CheckCircle size={13} color={C.green} strokeWidth={2} style={{ marginTop: 2, flexShrink: 0 }} />
+                            : <XCircle size={13} color={C.red} strokeWidth={2} style={{ marginTop: 2, flexShrink: 0 }} />}
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright, marginBottom: 2 }}>
+                              {chk.check}
+                              {(chk.container || chk.image) && (
+                                <span style={{ fontFamily: mono, fontSize: 9, color: C.textDim, marginLeft: 8, fontWeight: 400 }}>
+                                  {chk.container || chk.image}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontFamily: sans, fontSize: 11, color: chk.pass ? C.textDim : C.text }}>{chk.detail}</div>
+                          </div>
+                          <span style={{ fontFamily: mono, fontSize: 9, padding: "2px 7px", borderRadius: 3, fontWeight: 700, background: chk.pass ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)", color: chk.pass ? C.green : C.red, border: `1px solid ${chk.pass ? C.green + "44" : C.red + "44"}`, flexShrink: 0 }}>
+                            {chk.pass ? "PASS" : "FAIL"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -759,9 +930,11 @@ function PlaceholderPage({ title, icon: Icon, onBack }) {
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
 
-  const { containers, loading: lcont } = useContainers();
+  const socket = useSocket();
+  const { containers, loading: lcont } = useContainers(socket);
+  const { agents, loading: lagents }   = useAgents(socket);
   const { vulnerabilities, loading: lv } = useVulnerabilities();
-  const { alerts, loading: la, acknowledge, acknowledgeAll } = useAlerts();
+  const { alerts, loading: la, acknowledge, acknowledgeAll } = useAlerts(socket);
   const { compliance, loading: lcomp }   = useCompliance();
   const { events, loading: lev }         = useSecurityEvents();
   const { stats, loading: ls }           = useStats();
@@ -769,7 +942,6 @@ export default function Dashboard() {
 
   const PAGE_TITLES = {
     secrets:    { title: "Secrets Scan",   Icon: Lock },
-    compliance: { title: "Compliance",     Icon: CheckCircle },
     reports:    { title: "Reports",        Icon: FileText },
     audit:      { title: "Audit Log",      Icon: List },
     config:     { title: "Configuration",  Icon: Settings },
@@ -779,13 +951,15 @@ export default function Dashboard() {
   function renderPage() {
     switch (activeNav) {
       case "dashboard":
-        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} events={events} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} lev={lev} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} />;
+        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} events={events} scans={scans} compliance={compliance} stats={stats} agents={agents} ls={ls} lv={lv} lcont={lcont} lev={lev} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} />;
+      case "compliance":
+        return <CompliancePage compliance={compliance} loading={lcomp} onBack={() => setActiveNav("dashboard")} />;
       case "alerts":
         return <AlertsPage alerts={alerts} loading={la} onBack={() => setActiveNav("dashboard")} onAcknowledge={acknowledge} onAcknowledgeAll={acknowledgeAll} />;
       case "vulns":
         return <VulnsPage vulnerabilities={vulnerabilities} loading={lv} onBack={() => setActiveNav("dashboard")} />;
       case "monitor":
-        return <MonitorPage containers={containers} loading={lcont} onBack={() => setActiveNav("dashboard")} />;
+        return <MonitorPage containers={containers} agents={agents} loading={lcont} onBack={() => setActiveNav("dashboard")} />;
       default:
         const p = PAGE_TITLES[activeNav];
         return p ? <PlaceholderPage title={p.title} icon={p.Icon} onBack={() => setActiveNav("dashboard")} /> : null;
@@ -797,10 +971,11 @@ export default function Dashboard() {
       <Sidebar active={activeNav} onNav={setActiveNav} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar
-          clusterName={null}
+          clusterName={agents.length > 0 ? `${agents.filter(a => a.status === 'online').length}/${agents.length} agents online` : null}
           containerCount={containers.length}
           alertCount={alerts.filter(a => !a.acknowledged).length}
           alerts={alerts}
+          connected={socket.connected}
           onScan={() => setActiveNav("vulns")}
           onExport={() => console.log("TODO: export")}
           onAcknowledge={acknowledge}

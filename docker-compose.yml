@@ -1,0 +1,71 @@
+version: '3.8'
+
+# ─────────────────────────────────────────────
+# ContainerShield — Distributed Monitoring Stack
+#
+# Starts:
+#   - central backend (aggregates all agent reports)
+#   - agent-1 (monitors containers on this host)
+#   - agent-2 (second independent monitoring agent)
+#
+# Run: docker-compose up --build
+# Stop: docker-compose down
+# ─────────────────────────────────────────────
+
+services:
+
+  # ── Central Backend ──
+  backend:
+    build: ./server
+    container_name: cs-backend
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+    volumes:
+      # Give the backend access to Docker so it can run
+      # compliance checks and vulnerability scans locally
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+  # ── Monitoring Agent 1 ──
+  agent-1:
+    build: ./agent
+    container_name: cs-agent-1
+    environment:
+      - AGENT_ID=agent-1
+      - AGENT_LABEL=Host-Primary
+      - BACKEND_URL=http://backend:3002
+      - REPORT_INTERVAL=10000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+  # ── Monitoring Agent 2 ──
+  # Simulates a second host being monitored.
+  # In a real deployment this would run on a different machine.
+  agent-2:
+    build: ./agent
+    container_name: cs-agent-2
+    environment:
+      - AGENT_ID=agent-2
+      - AGENT_LABEL=Host-Secondary
+      - BACKEND_URL=http://backend:3002
+      - REPORT_INTERVAL=10000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+networks:
+  cs-network:
+    driver: bridge
