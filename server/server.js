@@ -17,6 +17,9 @@ const httpServer = http.createServer(app);
 // SOCKET.IO — real-time push to dashboard
 // ─────────────────────────────────────────────
 
+
+// stablishing the connection with the server. 
+
 const io = new Server(httpServer, {
   cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST'] }
 });
@@ -70,6 +73,9 @@ const THRESHOLDS = {
 
 const agentRegistry = new Map();
 // agentId → { agentId, agentLabel, lastSeen, hostInfo, containers, containerCount, status }
+
+
+// make sure we have the status of the agents - online - lastSeen - 2:35 - host infor -- etc 
 
 function registerAgent(payload) {
   const { agentId, agentLabel, timestamp, hostInfo, containers, containerCount } = payload;

@@ -1,3 +1,5 @@
+# creating our server for the agents 
+
 FROM node:20-alpine
 
 RUN apk add --no-cache curl

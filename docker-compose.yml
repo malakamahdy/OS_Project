@@ -35,10 +35,10 @@ services:
     build: ./agent
     container_name: cs-agent-1
     environment:
-      - AGENT_ID=agent-1
-      - AGENT_LABEL=Host-Primary
-      - BACKEND_URL=http://backend:3002
-      - REPORT_INTERVAL=10000
+      - AGENT_ID=agent-1               # the name of the agent - his name is agent 1 
+      - AGENT_LABEL=Host-Primary       # the name that it will dipsplay, whichh is host primary 
+      - BACKEND_URL=http://backend:3002    # were it will send the data to -> that is our backend       
+      - REPORT_INTERVAL=10000        # we are making sure that they report every 10 seconds 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -54,10 +54,10 @@ services:
     build: ./agent
     container_name: cs-agent-2
     environment:
-      - AGENT_ID=agent-2
-      - AGENT_LABEL=Host-Secondary
-      - BACKEND_URL=http://backend:3002
-      - REPORT_INTERVAL=10000
+      - AGENT_ID=agent-2               # the name of the agent - his name is agent 2
+      - AGENT_LABEL=Host-Secondary     #   the name that it will dipsplay, whichh is host secondary
+      - BACKEND_URL=http://backend:3002 # were it will send the data to -> that is our backend 
+      - REPORT_INTERVAL=10000            # we are making sure that they report every 10 seconds 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -69,3 +69,97 @@ services:
 networks:
   cs-network:
     driver: bridge
+
+
+
+   agent-3:
+    build: ./agent
+    container_name: cs-agent-3
+    environment:
+      - AGENT_ID=agent-3              
+      - AGENT_LABEL=Host-Secondary     
+      - BACKEND_URL=http://backend:3002 
+      - REPORT_INTERVAL=10000            
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+networks:
+  cs-network:
+    driver: bridge
+
+
+
+
+agent-4:
+    build: ./agent
+    container_name: cs-agent-4
+    environment:
+      - AGENT_ID=agent-4            
+      - AGENT_LABEL=Host-Secondary    
+      - BACKEND_URL=http://backend:3002  
+      - REPORT_INTERVAL=10000             
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+networks:
+  cs-network:
+    driver: bridge
+
+
+
+
+
+agent-5:
+    build: ./agent
+    container_name: cs-agent-5
+    environment:
+      - AGENT_ID=agent-5             
+      - AGENT_LABEL=Host-Secondary     
+      - BACKEND_URL=http://backend:3002 
+      - REPORT_INTERVAL=10000            
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+networks:
+  cs-network:
+    driver: bridge
+
+
+# ------------------------- Specialize Agent -------------------------------------------------- # 
+
+agent-6:
+    build: ./agent/specialize_agent
+    command: ["node", "specialize.js"] # had to add a command so that i dont change the starting code for the others agents 
+    container_name: cs-agent-6
+    environment:
+      - AGENT_ID=agent-2              
+      - AGENT_LABEL=Host-Secondary     
+      - BACKEND_URL=http://backend:3002 
+      - REPORT_INTERVAL=10000            
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - cs-network
+
+networks:
+  cs-network:
+    driver: bridge
+

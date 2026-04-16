@@ -1,6 +1,6 @@
-const Docker = require('dockerode');
-const axios = require('axios');
-const os = require('os');
+const Docker = require('dockerode'); // we want to kepe docker as constant because we dont want to overwrite the tool that talks to docker
+const axios = require('axios');  // same with axios, which is in charge of POST to the Backend
+const os = require('os'); 
 
 // ─────────────────────────────────────────────
 // AGENT CONFIG
@@ -8,29 +8,65 @@ const os = require('os');
 // docker-compose.yml so each agent is unique.
 // ─────────────────────────────────────────────
 
-const AGENT_ID      = process.env.AGENT_ID || `agent-${os.hostname()}`;
+
+
+// the reason here why we want give the agents that second option is becasue if it where the case that a user runs agent.js 
+// and they dont have the docker-compose, then we would set the default variables right here. is a safe measure. 
+
+
+const AGENT_ID      = process.env.AGENT_ID || `agent-${os.hostname()}`;  //
 const AGENT_LABEL   = process.env.AGENT_LABEL || os.hostname();
 const BACKEND_URL   = process.env.BACKEND_URL || 'http://localhost:3002';
-const REPORT_INTERVAL = parseInt(process.env.REPORT_INTERVAL || '10000'); // ms
+const REPORT_INTERVAL = parseInt(process.env.REPORT_INTERVAL || '10000'); // 
 
-const docker = new Docker({
+const docker = new Docker({                 // stablishing that connection between the agents.js and the docker engine
   socketPath: process.env.DOCKER_SOCKET ||
-    (process.platform === 'darwin'
+    (process.platform === 'darwin'                    // here we are checking depending on what kind of linux is the user running this, they are different paths for differens OS's
       ? `${process.env.HOME}/.docker/run/docker.sock`
       : '/var/run/docker.sock')
 });
 
 console.log(`[Agent] Starting: ${AGENT_ID} (${AGENT_LABEL})`);
 console.log(`[Agent] Reporting to: ${BACKEND_URL}`);
-console.log(`[Agent] Interval: ${REPORT_INTERVAL}ms`);
+console.log(`[Agent] Interval: ${REPORT_INTERVAL}ms`);            // here we are describing to the user what is happening, which is: 
+
+
+
+// starting agent - 1 (host primary) 
+
+// reporting to : https:// backend: 3002
+
+// interval : 10000ms -> 10 seconds 
 
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
 
+// this part is checking if each container is runnin well or not 
+
+
+
 function getHealth(container) {
   const state = container.State;
+  
+  
+// possibles values for state are:  
+
+// running, exited, dead, paused, restarting 
+
+
+
   const status = container.Status || '';
+
+// posible values for status are: 
+
+
+// up 2 hours (unhealthy) 
+// up 3 minutes (healthy)
+//exited (1) 5 minutes ago 
+
+
+
   if (state === 'running') {
     if (status.includes('unhealthy')) return 'crit';
     if (status.includes('health: starting')) return 'warn';
@@ -45,6 +81,27 @@ function parseImage(imageString) {
   const parts = (imageString || '').split(':');
   return { image: parts[0] || 'unknown', tag: parts[1] || 'latest' };
 }
+
+
+
+// will give us a detail sumarry of the agents are running and if they are healthy: 
+
+// depending on the status of each container we will get diffferent asnwers: 
+
+// crit -> something is wrong 
+
+
+// warn -> something could potentially go wronh 
+
+
+// ok -> everything is runnning fine 
+
+
+
+
+
+
+
 
 // ─────────────────────────────────────────────
 // COLLECT METRICS
@@ -66,7 +123,7 @@ async function collectMetrics() {
     let networkRx = null;
     let networkTx = null;
 
-    if (c.State === 'running') {
+    if (c.State === 'running') {  // if the container are running we will get a summary of the CPU, Memory, Network I/O
       try {
         const container = docker.getContainer(c.Id);
         const stats = await container.stats({ stream: false });
@@ -123,7 +180,16 @@ async function report() {
   try {
     const containers = await collectMetrics();
 
-    const payload = {
+
+    // the payload will give us the summry of: 
+
+    // - who is the agent, what machine is it on? 
+
+    // how much memory does the whole machine have? 
+
+    // etc 
+
+    const payload = {      
       agentId: AGENT_ID,
       agentLabel: AGENT_LABEL,
       timestamp: new Date().toISOString(),
