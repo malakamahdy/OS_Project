@@ -180,7 +180,7 @@ const threats = [] // we are going to keep track on the threats we see
 
 // ─────────────────────────────────────────────
 let consecutiveFailures = 0;
-
+let lastThreatSummary = '';
 async function report() {
   try {
     const threats = await collectNetworkThreats();
@@ -211,13 +211,15 @@ async function report() {
     });
 
     // log what we found so you can see it in terminal
-    if (threats.length > 0) {
-      console.log(`[Network Agent] ⚠ Found ${threats.length} threat(s):`);
-      threats.forEach(t => {
-        console.log(`  [${t.severity.toUpperCase()}] ${t.containerName}: ${t.threat}`);
-      });
-    } else {
-      console.log(`[Network Agent] ✓ No threats detected`);
+    const threatSummary = threats.map(t => t.containerName + t.threat).join(',');
+    if (threatSummary !== lastThreatSummary) {
+      lastThreatSummary = threatSummary;
+      if (threats.length > 0) {
+        console.log(`[Network Agent] ⚠ Found ${threats.length} threat(s):`);
+        threats.forEach(t => console.log(`  [${t.severity.toUpperCase()}] ${t.containerName}: ${t.threat}`));
+      } else {
+        console.log(`[Network Agent] ✓ No threats detected`);
+      }
     }
 
     if (consecutiveFailures > 0) {
