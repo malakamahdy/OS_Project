@@ -19,7 +19,7 @@ docker-compose up --build
 ```
 Runs the central backend at `http://localhost:3002` along with all monitoring agents.
 
-**Start the demo containers (optional but recommended):**
+**Start the demo containers:**
 ```bash
 docker-compose -f docker-compose.demo.yml up -d
 ```
