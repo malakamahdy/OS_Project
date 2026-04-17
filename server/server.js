@@ -605,6 +605,7 @@ app.get('/api/compliance', async (req, res) => {
   await acquireTrivyLock();
   try {
     const { results, overallScore } = await runComplianceChecks();
+    cachedComplianceScore = overallScore; // update cache
     res.json({ results, overallScore });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -612,6 +613,10 @@ app.get('/api/compliance', async (req, res) => {
     releaseTrivyLock();
   }
 });
+
+// Cached compliance score — updated when /api/compliance is called
+// Avoids running Trivy on every stats refresh
+let cachedComplianceScore = null;
 
 // GET /api/stats
 app.get('/api/stats', async (req, res) => {
@@ -623,7 +628,7 @@ app.get('/api/stats', async (req, res) => {
     const activeAlerts = alertStore.filter(a => !a.acknowledged).length;
     const onlineAgents = Array.from(agentRegistry.values()).filter(a => a.status === 'online').length;
 
-    res.json({ totalContainers, criticalVulns: null, complianceScore: null, threatsBlocked: activeAlerts, onlineAgents });
+    res.json({ totalContainers, criticalVulns: null, complianceScore: cachedComplianceScore, threatsBlocked: activeAlerts, onlineAgents });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
