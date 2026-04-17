@@ -1,0 +1,46 @@
+version: '3.8'
+
+# ─────────────────────────────────────────────
+# ContainerShield — Demo Containers
+# These are the containers being monitored.
+# Run: docker-compose -f docker-compose.demo.yml up -d
+# ─────────────────────────────────────────────
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: cs-postgres-db
+    environment:
+      - POSTGRES_PASSWORD=password
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cs-redis-cache
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: cs-nginx-proxy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  python-worker:
+    image: python:3.11-slim
+    container_name: cs-python-worker
+    command: python -c "import time; [time.sleep(10) or print('working...') for _ in iter(int, 1)]"
+    restart: unless-stopped
+
+  node-api:
+    image: node:20-alpine
+    container_name: cs-node-api
+    command: node -e "const http=require('http'); http.createServer((req,res)=>res.end('ok')).listen(3000); console.log('API running');"
+    restart: unless-stopped
+
+  alpine-logger:
+    image: alpine:3.19
+    container_name: cs-alpine-logger
+    command: sh -c "while true; do echo 'log entry'; sleep 5; done"
+    restart: unless-stopped

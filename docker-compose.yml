@@ -5,8 +5,9 @@ version: '3.8'
 #
 # Starts:
 #   - central backend (aggregates all agent reports)
-#   - agent-1 (monitors containers on this host)
-#   - agent-2 (second independent monitoring agent)
+#   - agent-1 (general metrics — Host-Primary)
+#   - agent-2 (general metrics — Host-Secondary, fault tolerance demo)
+#   - agent-3 (specialized network intrusion detection)
 #
 # Run: docker-compose up --build
 # Stop: docker-compose down
@@ -23,8 +24,6 @@ services:
     environment:
       - PORT=3002
     volumes:
-      # Give the backend access to Docker so it can run
-      # compliance checks and vulnerability scans locally
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     networks:
@@ -35,10 +34,10 @@ services:
     build: ./agent
     container_name: cs-agent-1
     environment:
-      - AGENT_ID=agent-1               # the name of the agent - his name is agent 1 
-      - AGENT_LABEL=Host-Primary       # the name that it will dipsplay, whichh is host primary 
-      - BACKEND_URL=http://backend:3002    # were it will send the data to -> that is our backend       
-      - REPORT_INTERVAL=10000        # we are making sure that they report every 10 seconds 
+      - AGENT_ID=agent-1
+      - AGENT_LABEL=Host-Primary
+      - BACKEND_URL=http://backend:3002
+      - REPORT_INTERVAL=10000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -48,16 +47,14 @@ services:
       - cs-network
 
   # ── Monitoring Agent 2 ──
-  # Simulates a second host being monitored.
-  # In a real deployment this would run on a different machine.
   agent-2:
     build: ./agent
     container_name: cs-agent-2
     environment:
-      - AGENT_ID=agent-2               # the name of the agent - his name is agent 2
-      - AGENT_LABEL=Host-Secondary     #   the name that it will dipsplay, whichh is host secondary
-      - BACKEND_URL=http://backend:3002 # were it will send the data to -> that is our backend 
-      - REPORT_INTERVAL=10000            # we are making sure that they report every 10 seconds 
+      - AGENT_ID=agent-2
+      - AGENT_LABEL=Host-Secondary
+      - BACKEND_URL=http://backend:3002
+      - REPORT_INTERVAL=10000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -66,20 +63,16 @@ services:
     networks:
       - cs-network
 
-networks:
-  cs-network:
-    driver: bridge
-
-
-
-   agent-3:
+  # ── Specialized Network Intrusion Detection Agent ──
+  agent-3:
     build: ./agent
+    command: ["node", "network_agent.js"]
     container_name: cs-agent-3
     environment:
-      - AGENT_ID=agent-3              
-      - AGENT_LABEL=Host-Secondary     
-      - BACKEND_URL=http://backend:3002 
-      - REPORT_INTERVAL=10000            
+      - AGENT_ID=agent-3
+      - AGENT_LABEL=Network-Intrusion-Detector
+      - BACKEND_URL=http://backend:3002
+      - REPORT_INTERVAL=10000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -91,75 +84,3 @@ networks:
 networks:
   cs-network:
     driver: bridge
-
-
-
-
-agent-4:
-    build: ./agent
-    container_name: cs-agent-4
-    environment:
-      - AGENT_ID=agent-4            
-      - AGENT_LABEL=Host-Secondary    
-      - BACKEND_URL=http://backend:3002  
-      - REPORT_INTERVAL=10000             
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - cs-network
-
-networks:
-  cs-network:
-    driver: bridge
-
-
-
-
-
-agent-5:
-    build: ./agent
-    container_name: cs-agent-5
-    environment:
-      - AGENT_ID=agent-5             
-      - AGENT_LABEL=Host-Secondary     
-      - BACKEND_URL=http://backend:3002 
-      - REPORT_INTERVAL=10000            
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - cs-network
-
-networks:
-  cs-network:
-    driver: bridge
-
-
-# ------------------------- Specialize Agent -------------------------------------------------- # 
-
-agent-6:
-    build: ./agent/specialize_agent
-    command: ["node", "specialize.js"] # had to add a command so that i dont change the starting code for the others agents 
-    container_name: cs-agent-6
-    environment:
-      - AGENT_ID=agent-2              
-      - AGENT_LABEL=Host-Secondary     
-      - BACKEND_URL=http://backend:3002 
-      - REPORT_INTERVAL=10000            
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - cs-network
-
-networks:
-  cs-network:
-    driver: bridge
-

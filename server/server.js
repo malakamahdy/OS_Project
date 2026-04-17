@@ -17,9 +17,6 @@ const httpServer = http.createServer(app);
 // SOCKET.IO — real-time push to dashboard
 // ─────────────────────────────────────────────
 
-
-// stablishing the connection with the server. 
-
 const io = new Server(httpServer, {
   cors: { origin: 'http://localhost:5173', methods: ['GET', 'POST'] }
 });
@@ -74,9 +71,6 @@ const THRESHOLDS = {
 const agentRegistry = new Map();
 // agentId → { agentId, agentLabel, lastSeen, hostInfo, containers, containerCount, status }
 
-
-// make sure we have the status of the agents - online - lastSeen - 2:35 - host infor -- etc 
-
 function registerAgent(payload) {
   const { agentId, agentLabel, timestamp, hostInfo, containers, containerCount } = payload;
   const existing = agentRegistry.get(agentId);
@@ -114,11 +108,15 @@ function getAgentSummary() {
 }
 
 function getAllContainersFromAgents() {
+  const seen = new Set();
   const all = [];
   for (const agent of agentRegistry.values()) {
     if (agent.status === 'online') {
       for (const c of agent.containers || []) {
-        all.push({ ...c, agentId: agent.agentId, agentLabel: agent.agentLabel, env: agent.agentLabel });
+        if (!seen.has(c.name)) {
+          seen.add(c.name);
+          all.push({ ...c, agentId: agent.agentId, agentLabel: agent.agentLabel, env: agent.agentLabel });
+        }
       }
     }
   }
@@ -265,6 +263,36 @@ function checkThresholds(agentLabel, containers) {
 }
 
 // ─────────────────────────────────────────────
+// TRIVY MUTEX LOCK
+// Ensures only one Trivy scan runs at a time.
+// Prevents cache conflicts when vuln + compliance
+// scans are triggered simultaneously.
+// ─────────────────────────────────────────────
+
+let trivyLocked = false;
+const trivyQueue = [];
+
+function acquireTrivyLock() {
+  return new Promise((resolve) => {
+    if (!trivyLocked) {
+      trivyLocked = true;
+      resolve();
+    } else {
+      trivyQueue.push(resolve);
+    }
+  });
+}
+
+function releaseTrivyLock() {
+  if (trivyQueue.length > 0) {
+    const next = trivyQueue.shift();
+    next();
+  } else {
+    trivyLocked = false;
+  }
+}
+
+// ─────────────────────────────────────────────
 // CONCURRENT VULNERABILITY SCANNING
 // Uses worker threads to scan multiple images
 // in parallel — true concurrent execution.
@@ -301,79 +329,113 @@ function scanImageInWorker(image) {
 }
 
 // ─────────────────────────────────────────────
-// COMPLIANCE CHECKS
+// COMPLIANCE CHECKS — Trivy CIS Docker Benchmark
+// Uses official CIS Docker Benchmark v1.6.0 via
+// Trivy's built-in compliance mode.
 // ─────────────────────────────────────────────
 
 async function runComplianceChecks() {
-  const containers = await docker.listContainers({ all: false });
+  // Get all running images to scan
+  const rawContainers = await docker.listContainers({ all: false });
+  const seen = new Set();
+  const images = rawContainers
+    .map(c => c.Image)
+    .filter(img => { if (seen.has(img)) return false; seen.add(img); return true; });
+
+  if (images.length === 0) {
+    return { results: [], overallScore: 0 };
+  }
+
+  // Run Trivy CIS compliance scan on first image
+  // (CIS checks are image-level, results apply to all containers using that image)
+  const allControls = [];
+
+  for (const image of images.slice(0, 3)) { // scan up to 3 images to avoid timeout
+    try {
+      const { stdout } = await execAsync(
+        `trivy image --compliance docker-cis-1.6.0 --format json --quiet "${image}"`,
+        { timeout: 180000, maxBuffer: 50 * 1024 * 1024 }
+      );
+      const result = JSON.parse(stdout);
+      if (result.SummaryControls) {
+        for (const control of result.SummaryControls) {
+          // Only add if not already present
+          if (!allControls.find(c => c.ID === control.ID)) {
+            allControls.push({ ...control, image });
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[Compliance] Scan failed for ${image}:`, err.message);
+    }
+  }
+
+  if (allControls.length === 0) {
+    return { results: [], overallScore: 0 };
+  }
+
+  // Group controls by section (4.x = Image, 5.x = Runtime, etc.)
+  const groups = {
+    image:   { id: 'image',   name: 'Image Security',      standard: 'CIS Docker Benchmark 4.x', controls: [] },
+    runtime: { id: 'runtime', name: 'Container Runtime',   standard: 'CIS Docker Benchmark 5.x', controls: [] },
+    other:   { id: 'other',   name: 'General Controls',    standard: 'CIS Docker Benchmark',      controls: [] },
+  };
+
+  for (const control of allControls) {
+    const section = control.ID.split('.')[0];
+    if (section === '4') groups.image.controls.push(control);
+    else if (section === '5') groups.runtime.controls.push(control);
+    else groups.other.controls.push(control);
+  }
+
   const results = [];
 
-  // Runtime checks
-  const runtimeChecks = [];
-  for (const c of containers) {
-    const info = await docker.getContainer(c.Id).inspect();
-    const name = info.Name.replace(/^\//, '');
-    const hc = info.HostConfig;
-    const user = info.Config.User;
+  for (const group of Object.values(groups)) {
+    if (group.controls.length === 0) continue;
 
-    runtimeChecks.push({ check: 'Non-root user', container: name, pass: !!(user && user !== '' && user !== 'root' && user !== '0'), detail: user ? `User: ${user}` : 'No user set — defaults to root' });
-    runtimeChecks.push({ check: 'Not privileged', container: name, pass: !hc.Privileged, detail: hc.Privileged ? 'Container is running in privileged mode' : 'OK' });
+    const checks = group.controls.map(c => {
+      const isManual = c.Name?.includes('(Manual)');
+      const failed = c.TotalFail > 0;
+      return {
+        check: `${c.ID} — ${c.Name}`,
+        pass: isManual ? true : !failed, // manual checks can't be auto-assessed
+        detail: isManual
+          ? 'Manual check — requires human review'
+          : failed
+          ? `${c.TotalFail} finding(s) detected`
+          : 'No issues found',
+        severity: (c.Severity || 'LOW').toLowerCase(),
+        manual: isManual,
+      };
+    });
 
-    const sensitiveMounts = (hc.Binds || []).filter(b => ['/etc', '/root', '/var/run/docker.sock', '/proc', '/sys', '/dev'].some(p => b.startsWith(p + ':')));
-    runtimeChecks.push({ check: 'No sensitive mounts', container: name, pass: sensitiveMounts.length === 0, detail: sensitiveMounts.length > 0 ? `Sensitive paths mounted: ${sensitiveMounts.join(', ')}` : 'OK' });
-    runtimeChecks.push({ check: 'Memory limit set', container: name, pass: !!(hc.Memory && hc.Memory > 0), detail: hc.Memory ? `Limit: ${Math.round(hc.Memory / 1024 / 1024)}MB` : 'No memory limit configured' });
-    runtimeChecks.push({ check: 'No host network mode', container: name, pass: hc.NetworkMode !== 'host', detail: hc.NetworkMode === 'host' ? 'Container uses host network stack' : `Network: ${hc.NetworkMode}` });
-    runtimeChecks.push({ check: 'Read-only root filesystem', container: name, pass: !!hc.ReadonlyRootfs, detail: hc.ReadonlyRootfs ? 'OK' : 'Root filesystem is writable' });
-    runtimeChecks.push({ check: 'No host PID namespace', container: name, pass: !hc.PidMode || hc.PidMode !== 'host', detail: hc.PidMode === 'host' ? 'Container shares host PID namespace' : 'OK' });
+    const autoChecks = checks.filter(c => !c.manual);
+    const passCount = autoChecks.filter(c => c.pass).length;
+    const totalCount = autoChecks.length;
+    const passPct = totalCount > 0 ? Math.round((passCount / totalCount) * 100) : 100;
+
+    results.push({
+      id: group.id,
+      name: group.name,
+      standard: group.standard,
+      passPct,
+      passCount,
+      totalCount,
+      checks,
+    });
   }
-
-  const runtimePass = runtimeChecks.filter(c => c.pass).length;
-  results.push({ id: 'runtime', name: 'Container Runtime', standard: 'CIS Docker Benchmark 5.x', passPct: runtimeChecks.length ? Math.round((runtimePass / runtimeChecks.length) * 100) : 0, passCount: runtimePass, totalCount: runtimeChecks.length, checks: runtimeChecks });
-
-  // Image checks
-  const allImages = await docker.listImages();
-  const imageChecks = [];
-  for (const img of allImages) {
-    const tag = (img.RepoTags || ['<untagged>'])[0];
-    imageChecks.push({ check: 'No latest tag', image: tag, pass: !tag.endsWith(':latest') && tag !== '<none>:<none>', detail: tag.endsWith(':latest') ? `${tag} uses :latest` : 'OK' });
-    const ageDays = (Date.now() - img.Created * 1000) / (1000 * 60 * 60 * 24);
-    imageChecks.push({ check: 'Image not outdated', image: tag, pass: ageDays < 180, detail: ageDays >= 180 ? `Image is ${Math.round(ageDays)} days old` : `Age: ${Math.round(ageDays)} days` });
-  }
-  const imagePass = imageChecks.filter(c => c.pass).length;
-  results.push({ id: 'images', name: 'Image Security', standard: 'CIS Docker Benchmark 4.x', passPct: imageChecks.length ? Math.round((imagePass / imageChecks.length) * 100) : 0, passCount: imagePass, totalCount: imageChecks.length, checks: imageChecks });
-
-  // Network checks
-  const networks = await docker.listNetworks();
-  const networkChecks = [];
-  const defaultBridge = networks.find(n => n.Name === 'bridge');
-  const containersOnBridge = containers.filter(c => c.NetworkSettings?.Networks?.bridge);
-  networkChecks.push({ check: 'Containers not on default bridge', pass: containersOnBridge.length === 0, detail: containersOnBridge.length > 0 ? `${containersOnBridge.length} container(s) on default bridge` : 'OK' });
-  const iccDisabled = defaultBridge?.Options?.['com.docker.network.bridge.enable_icc'] === 'false';
-  networkChecks.push({ check: 'ICC restricted', pass: iccDisabled, detail: iccDisabled ? 'OK' : 'ICC enabled on default bridge' });
-  const userNetworks = networks.filter(n => !['bridge', 'host', 'none'].includes(n.Name));
-  networkChecks.push({ check: 'User-defined networks in use', pass: userNetworks.length > 0, detail: userNetworks.length > 0 ? `${userNetworks.length} custom network(s)` : 'No user-defined networks' });
-  const networkPass = networkChecks.filter(c => c.pass).length;
-  results.push({ id: 'network', name: 'Network Security', standard: 'CIS Docker Benchmark 2.x', passPct: Math.round((networkPass / networkChecks.length) * 100), passCount: networkPass, totalCount: networkChecks.length, checks: networkChecks });
-
-  // Secrets checks
-  const secretChecks = [];
-  const sensitivePatterns = [/password/i, /secret/i, /api_key/i, /token/i, /private_key/i, /passwd/i];
-  for (const c of containers) {
-    const info = await docker.getContainer(c.Id).inspect();
-    const name = info.Name.replace(/^\//, '');
-    const envVars = info.Config.Env || [];
-    const exposedSecrets = envVars.filter(e => sensitivePatterns.some(p => p.test(e.split('=')[0])));
-    secretChecks.push({ check: 'No secrets in env vars', container: name, pass: exposedSecrets.length === 0, detail: exposedSecrets.length > 0 ? `Suspicious vars: ${exposedSecrets.map(e => e.split('=')[0]).join(', ')}` : 'OK' });
-  }
-  const secretPass = secretChecks.filter(c => c.pass).length;
-  results.push({ id: 'secrets', name: 'Secrets Management', standard: 'CIS Docker Benchmark 4.x', passPct: secretChecks.length ? Math.round((secretPass / secretChecks.length) * 100) : 100, passCount: secretPass, totalCount: secretChecks.length, checks: secretChecks });
 
   const totalPass = results.reduce((s, r) => s + r.passCount, 0);
   const totalChecks = results.reduce((s, r) => s + r.totalCount, 0);
   const overallScore = totalChecks > 0 ? Math.round((totalPass / totalChecks) * 100) : 0;
 
   if (overallScore < 60) {
-    addAlert({ title: 'Low Compliance Score', description: `Overall compliance score is ${overallScore}%. Review CIS Docker Benchmark findings.`, severity: 'warning', source: 'compliance-checker' });
+    addAlert({
+      title: 'Low Compliance Score',
+      description: `CIS Docker Benchmark score is ${overallScore}%. Review findings.`,
+      severity: 'warning',
+      source: 'compliance-checker',
+    });
   }
 
   return { results, overallScore };
@@ -391,9 +453,25 @@ app.post('/api/agent/report', (req, res) => {
     if (!payload.agentId) return res.status(400).json({ error: 'Missing agentId' });
 
     registerAgent(payload);
-    checkThresholds(payload.agentLabel, payload.containers || []);
 
-    // Broadcast live container update to dashboard
+    if (payload.agentType === 'network') {
+      // agent-3 (Network-Intrusion-Detector) sends threats instead of container metrics
+      for (const threat of payload.threats || []) {
+        addAlert({
+          title: threat.threat,
+          description: threat.detail,
+          severity: threat.severity === 'critical' ? 'critical'
+                  : threat.severity === 'high'     ? 'warning'
+                  : 'info',
+          source: `network-agent:${threat.containerName}`,
+        });
+      }
+    } else {
+      // agent-1 and agent-2 send container metrics
+      checkThresholds(payload.agentLabel, payload.containers || []);
+    }
+
+    // Broadcast live updates to dashboard
     broadcast('containers:update', getAllContainersFromAgents());
     broadcast('agents:update', getAgentSummary());
 
@@ -467,6 +545,7 @@ app.post('/api/alerts/acknowledge-all', (req, res) => {
 
 // GET /api/vulnerabilities — concurrent scanning via worker threads
 app.get('/api/vulnerabilities', async (req, res) => {
+  await acquireTrivyLock();
   try {
     const rawContainers = await docker.listContainers({ all: false });
     const seen = new Set();
@@ -474,7 +553,6 @@ app.get('/api/vulnerabilities', async (req, res) => {
       .map(c => ({ containerName: (c.Names[0] || '').replace(/^\//, ''), image: c.Image }))
       .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
 
-    // Concurrent scanning — each image scanned in its own worker thread
     console.log(`[Vuln] Scanning ${targets.length} images concurrently...`);
     const scanResults = await Promise.allSettled(
       targets.map(({ image }) => scanImageInWorker(image))
@@ -517,16 +595,21 @@ app.get('/api/vulnerabilities', async (req, res) => {
     res.json(allVulns);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    releaseTrivyLock();
   }
 });
 
 // GET /api/compliance
 app.get('/api/compliance', async (req, res) => {
+  await acquireTrivyLock();
   try {
     const { results, overallScore } = await runComplianceChecks();
     res.json({ results, overallScore });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    releaseTrivyLock();
   }
 });
 
@@ -540,13 +623,7 @@ app.get('/api/stats', async (req, res) => {
     const activeAlerts = alertStore.filter(a => !a.acknowledged).length;
     const onlineAgents = Array.from(agentRegistry.values()).filter(a => a.status === 'online').length;
 
-    let complianceScore = null;
-    try {
-      const { overallScore } = await runComplianceChecks();
-      complianceScore = overallScore;
-    } catch { /* compliance unavailable */ }
-
-    res.json({ totalContainers, criticalVulns: null, complianceScore, threatsBlocked: activeAlerts, onlineAgents });
+    res.json({ totalContainers, criticalVulns: null, complianceScore: null, threatsBlocked: activeAlerts, onlineAgents });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
