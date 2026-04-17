@@ -149,6 +149,22 @@ function useStats() {
 
 function useScanHistory() { return { scans: [], loading: false, error: null }; }
 
+function useSecrets() {
+  const [secrets, setSecrets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [scanned, setScanned] = useState(false);
+
+  const scan = () => {
+    setLoading(true);
+    fetch('http://localhost:3002/api/secrets')
+      .then(res => res.json())
+      .then(data => { setSecrets(Array.isArray(data) ? data : []); setLoading(false); setScanned(true); })
+      .catch(() => { setLoading(false); setScanned(true); });
+  };
+
+  return { secrets, loading, scanned, scan };
+}
+
 // ─────────────────────────────────────────────
 // DESIGN TOKENS
 // ─────────────────────────────────────────────
@@ -514,7 +530,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
         <StatCard label="Containers Active" value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} />
         <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} />
         <StatCard label="Compliance Score" value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} />
-        <StatCard label="Active Alerts" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
+        <StatCard label="Threats Blocked" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
       </div>
 
       {/* ROW 1 */}
@@ -574,9 +590,9 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
               </div>
             ))
           }
-          {containers.length > 4 && (
+          {containers.length > 6 && (
             <div onClick={() => onNav("monitor")} style={{ padding: "10px 18px", fontFamily: mono, fontSize: 9, color: C.cyan, cursor: "pointer", textAlign: "center" }}>
-              +{containers.length - 4} MORE →
+              +{containers.length - 6} MORE →
             </div>
           )}
         </Panel>
@@ -930,6 +946,150 @@ function CompliancePage({ compliance, loading, onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// PAGE: SECRETS SCAN
+// ─────────────────────────────────────────────
+
+function SecretsPage({ onBack }) {
+  const { secrets, loading, scanned, scan } = useSecrets();
+  const [filter, setFilter] = useState("all");
+  const filtered = filter === "all" ? secrets : secrets.filter(s => s.severity === filter);
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Secrets Scan</div>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>
+          {scanned ? `${secrets.length} SECRETS FOUND` : "NOT YET SCANNED"}
+        </Mono>
+        <button onClick={scan} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, letterSpacing: "0.05em" }}>
+          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SCAN"}
+        </button>
+      </div>
+
+      {!scanned ? (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 16 }}>
+          <Lock size={32} color={C.border2} strokeWidth={1} />
+          <div style={{ fontFamily: sans, fontSize: 14, color: C.textDim, textAlign: "center" }}>
+            Scan your container images for hardcoded secrets
+          </div>
+          <Mono size={9} color={C.textDim}>API KEYS · PASSWORDS · PRIVATE KEYS · TOKENS</Mono>
+          <button onClick={scan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em", marginTop: 8 }}>
+            <Play size={12} strokeWidth={2} /> RUN SECRETS SCAN
+          </button>
+        </div>
+      ) : loading ? (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 340, gap: 20, overflow: "hidden", position: "relative" }}>
+          {/* Animated scan line */}
+          <style>{`
+            @keyframes scanline {
+              0% { top: 0%; opacity: 1; }
+              100% { top: 100%; opacity: 0.2; }
+            }
+            @keyframes pulse-ring {
+              0% { transform: scale(0.8); opacity: 0.8; }
+              100% { transform: scale(1.6); opacity: 0; }
+            }
+            @keyframes blink {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.2; }
+            }
+            @keyframes scroll-code {
+              0% { transform: translateY(0); }
+              100% { transform: translateY(-50%); }
+            }
+          `}</style>
+
+          {/* Scrolling code background */}
+          <div style={{ position: "absolute", inset: 0, overflow: "hidden", opacity: 0.04 }}>
+            <div style={{ fontFamily: mono, fontSize: 9, color: C.cyan, lineHeight: 1.8, padding: "10px 20px", animation: "scroll-code 8s linear infinite", whiteSpace: "pre" }}>
+              {[...Array(6)].map((_, i) => (
+                `AWS_SECRET_KEY=AKIA... GITHUB_TOKEN=ghp_... PRIVATE_KEY=-----BEGIN... DB_PASSWORD=... API_KEY=sk-... JWT_SECRET=...\n`
+              )).join('')}
+              {[...Array(6)].map((_, i) => (
+                `AWS_SECRET_KEY=AKIA... GITHUB_TOKEN=ghp_... PRIVATE_KEY=-----BEGIN... DB_PASSWORD=... API_KEY=sk-... JWT_SECRET=...\n`
+              )).join('')}
+            </div>
+          </div>
+
+          {/* Scan line sweep */}
+          <div style={{ position: "absolute", left: 0, right: 0, height: 2, background: `linear-gradient(90deg, transparent, ${C.cyan}, transparent)`, animation: "scanline 1.8s ease-in-out infinite", boxShadow: `0 0 12px ${C.cyan}` }} />
+
+          {/* Center icon with pulse */}
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{ position: "absolute", inset: -16, borderRadius: "50%", border: `2px solid ${C.cyan}44`, animation: "pulse-ring 1.5s ease-out infinite" }} />
+            <div style={{ position: "absolute", inset: -16, borderRadius: "50%", border: `2px solid ${C.cyan}44`, animation: "pulse-ring 1.5s ease-out infinite 0.5s" }} />
+            <div style={{ width: 56, height: 56, borderRadius: "50%", background: `${C.cyan}15`, border: `1.5px solid ${C.cyan}66`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Search size={22} color={C.cyan} strokeWidth={1.5} />
+            </div>
+          </div>
+
+          {/* Status text */}
+          <div style={{ position: "relative", zIndex: 1, textAlign: "center" }}>
+            <div style={{ fontFamily: sans, fontSize: 14, fontWeight: 600, color: C.textBright, marginBottom: 6 }}>
+              Scanning images for secrets
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.cyan, animation: "blink 1s ease-in-out infinite" }} />
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.cyan, animation: "blink 1s ease-in-out infinite 0.3s" }} />
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.cyan, animation: "blink 1s ease-in-out infinite 0.6s" }} />
+            </div>
+            <Mono size={9} color={C.textDim} style={{ marginTop: 10 }}>CHECKING FOR API KEYS · PASSWORDS · TOKENS · PRIVATE KEYS</Mono>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            {["all", "critical", "high", "medium", "low"].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{ fontFamily: mono, fontSize: 9, padding: "5px 13px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.1em", textTransform: "uppercase", background: filter === f ? `${C.cyan}18` : "transparent", color: filter === f ? C.cyan : C.textDim, border: `1px solid ${filter === f ? C.cyan : C.border}`, transition: "all 0.12s" }}>
+                {f} {f !== "all" && `(${secrets.filter(s => s.severity === f).length})`}
+              </button>
+            ))}
+          </div>
+
+          <Panel title="Secrets Found" icon={Lock}>
+            {loading ? <Loading /> : filtered.length === 0 ? (
+              <EmptyState icon={CheckCircle} message={secrets.length === 0 ? "NO SECRETS DETECTED — IMAGES LOOK CLEAN" : "NO SECRETS MATCH THIS FILTER"} />
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Severity</th>
+                      <th style={TH}>Container</th>
+                      <th style={TH}>Type</th>
+                      <th style={TH}>Description</th>
+                      <th style={TH}>Location</th>
+                      <th style={TH}>Match</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(s => (
+                      <tr key={s.id}
+                        onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <td style={TD}><SeverityBadge severity={s.severity} /></td>
+                        <td style={TD}><Mono size={11} color={C.textBright}>{s.container}</Mono></td>
+                        <td style={TD}><Mono size={10} color={C.amber}>{s.category}</Mono></td>
+                        <td style={TD}><span style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{s.title}</span></td>
+                        <td style={TD}><Mono size={10} color={C.textDim}>{s.target}</Mono></td>
+                        <td style={TD}><Mono size={10} color={C.red}>{s.match || "—"}</Mono></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -972,7 +1132,6 @@ export default function Dashboard() {
   const { scans, loading: lsc }        = useScanHistory();
 
   const PAGE_TITLES = {
-    secrets:    { title: "Secrets Scan",   Icon: Lock },
     reports:    { title: "Reports",        Icon: FileText },
     audit:      { title: "Audit Log",      Icon: List },
     config:     { title: "Configuration",  Icon: Settings },
@@ -991,6 +1150,8 @@ export default function Dashboard() {
         return <VulnsPage vulnerabilities={vulnerabilities} loading={lv} onBack={() => setActiveNav("dashboard")} />;
       case "monitor":
         return <MonitorPage containers={containers} agents={agents} loading={lcont} onBack={() => setActiveNav("dashboard")} />;
+      case "secrets":
+        return <SecretsPage onBack={() => setActiveNav("dashboard")} />;
       default:
         const p = PAGE_TITLES[activeNav];
         return p ? <PlaceholderPage title={p.title} icon={p.Icon} onBack={() => setActiveNav("dashboard")} /> : null;

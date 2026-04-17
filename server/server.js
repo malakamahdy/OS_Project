@@ -328,6 +328,36 @@ function scanImageInWorker(image) {
   });
 }
 
+function scanSecretsInWorker(image) {
+  return new Promise((resolve, reject) => {
+    const workerCode = `
+      const { execSync } = require('child_process');
+      const { workerData, parentPort } = require('worker_threads');
+      try {
+        const out = execSync(
+          \`trivy image --format json --quiet --scanners secret "\${workerData.image}"\`,
+          { timeout: 120000, maxBuffer: 50 * 1024 * 1024 }
+        );
+        const result = JSON.parse(out.toString());
+        parentPort.postMessage({ ok: true, result });
+      } catch (err) {
+        parentPort.postMessage({ ok: false, error: err.message });
+      }
+    `;
+
+    const worker = new Worker(workerCode, {
+      eval: true,
+      workerData: { image },
+    });
+
+    worker.on('message', resolve);
+    worker.on('error', reject);
+    worker.on('exit', (code) => {
+      if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+    });
+  });
+}
+
 // ─────────────────────────────────────────────
 // COMPLIANCE CHECKS — Trivy CIS Docker Benchmark
 // Uses official CIS Docker Benchmark v1.6.0 via
@@ -607,6 +637,66 @@ app.get('/api/compliance', async (req, res) => {
     const { results, overallScore } = await runComplianceChecks();
     cachedComplianceScore = overallScore; // update cache
     res.json({ results, overallScore });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    releaseTrivyLock();
+  }
+});
+
+// GET /api/secrets — scans images for hardcoded secrets using Trivy
+app.get('/api/secrets', async (req, res) => {
+  await acquireTrivyLock();
+  try {
+    const rawContainers = await docker.listContainers({ all: false });
+    const seen = new Set();
+    const targets = rawContainers
+      .map(c => ({ containerName: (c.Names[0] || '').replace(/^\//, ''), image: c.Image }))
+      .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
+
+    console.log(`[Secrets] Scanning ${targets.length} images concurrently...`);
+    const scanResults = await Promise.allSettled(
+      targets.map(({ image }) => scanSecretsInWorker(image))
+    );
+
+    const allSecrets = [];
+    let idCounter = 0;
+
+    scanResults.forEach((result, i) => {
+      const { containerName, image } = targets[i];
+      if (result.status === 'fulfilled' && result.value.ok) {
+        for (const r of result.value.result.Results || []) {
+          for (const s of r.Secrets || []) {
+            allSecrets.push({
+              id: `secret-${idCounter++}`,
+              container: containerName,
+              image,
+              ruleId: s.RuleID,
+              category: s.Category || 'secret',
+              title: s.Title,
+              severity: (s.Severity || 'unknown').toLowerCase(),
+              match: s.Match ? s.Match.slice(0, 80) + (s.Match.length > 80 ? '…' : '') : null,
+              target: r.Target,
+            });
+          }
+        }
+      } else {
+        console.error(`[Secrets] Scan failed for ${targets[i].image}:`, result.reason || result.value?.error);
+      }
+    });
+
+    if (allSecrets.length > 0) {
+      addAlert({
+        title: 'Secrets Detected in Images',
+        description: `${allSecrets.length} secret(s) found hardcoded in container images.`,
+        severity: 'critical',
+        source: 'secrets-scanner',
+      });
+    }
+
+    const ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+    allSecrets.sort((a, b) => (ORDER[a.severity] ?? 9) - (ORDER[b.severity] ?? 9));
+    res.json(allSecrets);
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
