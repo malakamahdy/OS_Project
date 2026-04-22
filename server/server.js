@@ -163,23 +163,73 @@ setInterval(() => {
 let alertStore = [];
 let alertIdCounter = 0;
 
+let auditStore = [];
+let auditIdCounter = 0;
+
+function addAuditEvent({ type, severity = 'info', source = 'system', title, description, meta = null }) {
+  auditStore.unshift({
+    id: `audit-${auditIdCounter++}`,
+    type,
+    severity,
+    source,
+    title,
+    description,
+    meta,
+    timestamp: new Date().toISOString(),
+  });
+
+  // keep only the latest 500 events
+  if (auditStore.length > 500) {
+    auditStore = auditStore.slice(0, 500);
+  }
+}
+
 function addAlert({ title, description, severity, source }) {
   const exists = alertStore.find(a => !a.acknowledged && a.title === title && a.source === source);
   if (exists) return;
 
   const alert = {
     id: `alert-${alertIdCounter++}`,
-    title, description, severity, source,
+    title,
+    description,
+    severity,
+    source,
     timestamp: new Date().toISOString(),
     acknowledged: false,
   };
+
   alertStore.push(alert);
 
-  // Push to all connected dashboard clients immediately
+  addAuditEvent({
+    type: 'alert_created',
+    severity,
+    source,
+    title,
+    description,
+    meta: { alertId: alert.id },
+  });
+
   broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
 }
 
 function resolveAlert(title, source) {
+  const matching = alertStore.filter(
+    a => a.title === title && a.source === source && !a.acknowledged
+  );
+
+  if (matching.length > 0) {
+    matching.forEach(a => {
+      addAuditEvent({
+        type: 'alert_resolved',
+        severity: a.severity,
+        source: a.source,
+        title: a.title,
+        description: a.description,
+        meta: { alertId: a.id },
+      });
+    });
+  }
+
   const before = alertStore.filter(a => !a.acknowledged).length;
   alertStore = alertStore.map(a =>
     a.title === title && a.source === source && !a.acknowledged
@@ -187,7 +237,10 @@ function resolveAlert(title, source) {
       : a
   );
   const after = alertStore.filter(a => !a.acknowledged).length;
-  if (before !== after) broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
+
+  if (before !== after) {
+    broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -557,17 +610,46 @@ app.get('/api/alerts', (req, res) => {
   res.json(alertStore.filter(a => !a.acknowledged).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
 });
 
+// GET /api/audit
+app.get('/api/audit', (req, res) => {
+  res.json(auditStore);
+});
+
 // POST /api/alerts/:id/acknowledge
 app.post('/api/alerts/:id/acknowledge', (req, res) => {
   const alert = alertStore.find(a => a.id === req.params.id);
   if (!alert) return res.status(404).json({ error: 'Not found' });
+
   alert.acknowledged = true;
+
+  addAuditEvent({
+    type: 'alert_acknowledged',
+    severity: alert.severity,
+    source: alert.source,
+    title: alert.title,
+    description: alert.description,
+    meta: { alertId: alert.id },
+  });
+
   broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
   res.json({ ok: true });
 });
 
 // POST /api/alerts/acknowledge-all
 app.post('/api/alerts/acknowledge-all', (req, res) => {
+  const activeAlerts = alertStore.filter(a => !a.acknowledged);
+
+  activeAlerts.forEach(alert => {
+    addAuditEvent({
+      type: 'alert_acknowledged',
+      severity: alert.severity,
+      source: alert.source,
+      title: alert.title,
+      description: alert.description,
+      meta: { alertId: alert.id, bulk: true },
+    });
+  });
+
   alertStore = alertStore.map(a => ({ ...a, acknowledged: true }));
   broadcast('alerts:update', []);
   res.json({ ok: true });
@@ -584,6 +666,14 @@ app.get('/api/vulnerabilities', async (req, res) => {
       .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
 
     console.log(`[Vuln] Scanning ${targets.length} images concurrently...`);
+    addAuditEvent({
+      type: 'vulnerability_scan_started',
+      severity: 'info',
+      source: 'vulnerability-scanner',
+      title: 'Vulnerability Scan Started',
+      description: `Started vulnerability scan for ${targets.length} image(s).`,
+      meta: { targetCount: targets.length },
+    });
     const scanResults = await Promise.allSettled(
       targets.map(({ image }) => scanImageInWorker(image))
     );
@@ -633,10 +723,23 @@ app.get('/api/vulnerabilities', async (req, res) => {
 // GET /api/compliance
 app.get('/api/compliance', async (req, res) => {
   await acquireTrivyLock();
+
   try {
+
+    addAuditEvent({
+      type: 'compliance_scan_started',
+      severity: 'info',
+      source: 'compliance-checker',
+      title: 'Compliance Scan Started',
+      description: 'Started CIS Docker Benchmark compliance scan.'
+    });
+
     const { results, overallScore } = await runComplianceChecks();
-    cachedComplianceScore = overallScore; // update cache
+
+    cachedComplianceScore = overallScore;
+
     res.json({ results, overallScore });
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
@@ -655,6 +758,14 @@ app.get('/api/secrets', async (req, res) => {
       .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
 
     console.log(`[Secrets] Scanning ${targets.length} images concurrently...`);
+    addAuditEvent({
+      type: 'secrets_scan_started',
+      severity: 'info',
+      source: 'secrets-scanner',
+      title: 'Secrets Scan Started',
+      description: `Started secrets scan for ${targets.length} image(s).`,
+      meta: { targetCount: targets.length },
+    });
     const scanResults = await Promise.allSettled(
       targets.map(({ image }) => scanSecretsInWorker(image))
     );
