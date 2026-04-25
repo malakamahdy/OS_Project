@@ -475,7 +475,7 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
           <Download size={12} strokeWidth={1.5} /> EXPORT
         </button>
         <button onClick={onScan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
-          <Play size={11} strokeWidth={2} /> RUN SCAN
+          <Play size={11} strokeWidth={2} /> RUN VULNERABILITY SCAN
         </button>
 
         <div style={{ position: "relative" }}>
@@ -987,7 +987,7 @@ function SecretsPage({ onBack }) {
           {scanned ? `${secrets.length} SECRETS FOUND` : "NOT YET SCANNED"}
         </Mono>
         <button onClick={scan} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, letterSpacing: "0.05em" }}>
-          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SCAN"}
+          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SECRETS SCAN"}
         </button>
       </div>
 
