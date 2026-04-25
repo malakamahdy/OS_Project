@@ -333,6 +333,8 @@ const TH = { fontFamily: mono, fontSize: 9, letterSpacing: "0.15em", textTransfo
 const TD = { padding: "12px 18px", fontSize: 12, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
 
 function VulnTable({ rows }) {
+  const [expanded, setExpanded] = useState(null);
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -344,21 +346,102 @@ function VulnTable({ rows }) {
             <th style={TH}>Severity</th>
             <th style={TH}>CVSS</th>
             <th style={TH}>Status</th>
+            <th style={TH}></th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(v => (
-            <tr key={v.id} style={{ transition: "background 0.1s" }}
-              onMouseEnter={e => e.currentTarget.style.background = C.surface2}
-              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-              <td style={TD}><Mono size={11} color={C.cyan}>{v.cveId}</Mono></td>
-              <td style={TD}><Mono size={11} color={C.textBright}>{v.container}</Mono></td>
-              <td style={TD}><span style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{v.package} <span style={{ color: C.textDim }}>{v.version}</span></span></td>
-              <td style={TD}><SeverityBadge severity={v.severity} /></td>
-              <td style={TD}><Mono size={11} color={C.amber}>{v.cvss ?? "—"}</Mono></td>
-              <td style={TD}><StatusPill status={v.status} /></td>
-            </tr>
-          ))}
+          {rows.map(v => {
+            const isOpen = expanded === v.id;
+            return (
+              <>
+                <tr key={v.id}
+                  style={{ cursor: "pointer", transition: "background 0.1s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                  onMouseLeave={e => e.currentTarget.style.background = isOpen ? C.surface2 : "transparent"}
+                  onClick={() => setExpanded(isOpen ? null : v.id)}>
+                  <td style={TD}><Mono size={11} color={C.cyan}>{v.cveId}</Mono></td>
+                  <td style={TD}><Mono size={11} color={C.textBright}>{v.container}</Mono></td>
+                  <td style={TD}><span style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{v.package} <span style={{ color: C.textDim }}>{v.version}</span></span></td>
+                  <td style={TD}><SeverityBadge severity={v.severity} /></td>
+                  <td style={TD}><Mono size={11} color={C.amber}>{v.cvss ?? "—"}</Mono></td>
+                  <td style={TD}><StatusPill status={v.status} /></td>
+                  <td style={TD}><Mono size={10} color={C.textDim}>{isOpen ? "▲" : "▼"}</Mono></td>
+                </tr>
+                {isOpen && (
+                  <tr key={`${v.id}-detail`}>
+                    <td colSpan={7} style={{ padding: 0, background: C.surface2, borderBottom: `1px solid ${C.border}` }}>
+                      <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+
+                        {/* CVE header */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <Mono size={13} color={C.cyan} style={{ fontWeight: 700 }}>{v.cveId}</Mono>
+                          <SeverityBadge severity={v.severity} />
+                          {v.cvss && <span style={{ fontFamily: mono, fontSize: 11, color: C.amber }}>CVSS {v.cvss}</span>}
+                          {v.fixedVersion && <span style={{ fontFamily: mono, fontSize: 10, color: C.green, background: "rgba(52,211,153,0.1)", border: `1px solid ${C.green}44`, padding: "2px 8px", borderRadius: 3 }}>FIX AVAILABLE: {v.fixedVersion}</span>}
+                          {!v.fixedVersion && <span style={{ fontFamily: mono, fontSize: 10, color: C.red, background: "rgba(251,113,133,0.1)", border: `1px solid ${C.red}44`, padding: "2px 8px", borderRadius: 3 }}>NO FIX AVAILABLE</span>}
+                        </div>
+
+                        {/* Details grid */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                          <div>
+                            <Mono size={9} color={C.textDim}>PACKAGE</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, marginTop: 3 }}>{v.package}</div>
+                          </div>
+                          <div>
+                            <Mono size={9} color={C.textDim}>INSTALLED VERSION</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, marginTop: 3 }}>{v.version}</div>
+                          </div>
+                          <div>
+                            <Mono size={9} color={C.textDim}>FIXED VERSION</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: v.fixedVersion ? C.green : C.textDim, marginTop: 3 }}>{v.fixedVersion || "None"}</div>
+                          </div>
+                          <div>
+                            <Mono size={9} color={C.textDim}>IMAGE</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, marginTop: 3 }}>{v.image || v.container}</div>
+                          </div>
+                          <div>
+                            <Mono size={9} color={C.textDim}>TARGET</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, marginTop: 3 }}>{v.target || "—"}</div>
+                          </div>
+                          <div>
+                            <Mono size={9} color={C.textDim}>PUBLISHED</Mono>
+                            <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, marginTop: 3 }}>{v.publishedDate ? new Date(v.publishedDate).toLocaleDateString() : "—"}</div>
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        {v.description && (
+                          <div>
+                            <Mono size={9} color={C.textDim} style={{ marginBottom: 6 }}>DESCRIPTION</Mono>
+                            <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.6, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px 14px" }}>
+                              {v.description}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* References */}
+                        {v.references && v.references.length > 0 && (
+                          <div>
+                            <Mono size={9} color={C.textDim} style={{ marginBottom: 6 }}>REFERENCES</Mono>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              {v.references.slice(0, 5).map((ref, i) => (
+                                <a key={i} href={ref} target="_blank" rel="noopener noreferrer" style={{ fontFamily: mono, fontSize: 10, color: C.cyan, textDecoration: "none", wordBreak: "break-all" }}
+                                  onMouseEnter={e => e.currentTarget.style.textDecoration = "underline"}
+                                  onMouseLeave={e => e.currentTarget.style.textDecoration = "none"}>
+                                  {ref}
+                                </a>
+                              ))}
+                              {v.references.length > 5 && <Mono size={9} color={C.textDim}>+{v.references.length - 5} more references</Mono>}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -475,7 +558,7 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
           <Download size={12} strokeWidth={1.5} /> EXPORT
         </button>
         <button onClick={onScan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
-          <Play size={11} strokeWidth={2} /> RUN VULNERABILITY SCAN
+          <Play size={11} strokeWidth={2} /> RUN SCAN
         </button>
 
         <div style={{ position: "relative" }}>
@@ -552,7 +635,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
         <StatCard label="Containers Active" value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} />
         <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} />
         <StatCard label="Compliance Score" value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} />
-        <StatCard label="Active Alerts" value={ls ? "…" : stats?.activeAlerts} icon={Shield} accent={C.amber} />
+        <StatCard label="Threats Blocked" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
       </div>
 
       {/* ROW 1 */}
@@ -987,7 +1070,7 @@ function SecretsPage({ onBack }) {
           {scanned ? `${secrets.length} SECRETS FOUND` : "NOT YET SCANNED"}
         </Mono>
         <button onClick={scan} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, letterSpacing: "0.05em" }}>
-          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SECRETS SCAN"}
+          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SCAN"}
         </button>
       </div>
 

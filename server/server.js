@@ -630,6 +630,7 @@ app.get('/api/vulnerabilities', async (req, res) => {
               id: `vuln-${idCounter++}`,
               cveId: v.VulnerabilityID,
               container: containerName,
+              image,
               package: v.PkgName,
               version: v.InstalledVersion,
               fixedVersion: v.FixedVersion || null,
@@ -637,6 +638,10 @@ app.get('/api/vulnerabilities', async (req, res) => {
               cvss: v.CVSS ? parseFloat(Object.values(v.CVSS).map(s => s.V3Score || s.V2Score || 0).sort((a, b) => b - a)[0].toFixed(1)) : null,
               status: 'open',
               description: v.Description || null,
+              references: v.References || [],
+              publishedDate: v.PublishedDate || null,
+              lastModifiedDate: v.LastModifiedDate || null,
+              target: r.Target || null,
             });
           }
         }
@@ -750,7 +755,7 @@ app.get('/api/stats', async (req, res) => {
     const activeAlerts = alertStore.filter(a => !a.acknowledged).length;
     const onlineAgents = Array.from(agentRegistry.values()).filter(a => a.status === 'online').length;
 
-    res.json({ totalContainers, criticalVulns: null, complianceScore: cachedComplianceScore, activeAlerts: activeAlerts, onlineAgents });
+    res.json({ totalContainers, criticalVulns: null, complianceScore: cachedComplianceScore, threatsBlocked: activeAlerts, onlineAgents });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
