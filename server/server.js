@@ -163,25 +163,21 @@ setInterval(() => {
 let alertStore = [];
 let alertIdCounter = 0;
 
+// ─────────────────────────────────────────────
+// AUDIT STORE
+// Logs key security events with timestamps.
+// ─────────────────────────────────────────────
+
 let auditStore = [];
 let auditIdCounter = 0;
 
 function addAuditEvent({ type, severity = 'info', source = 'system', title, description, meta = null }) {
   auditStore.unshift({
     id: `audit-${auditIdCounter++}`,
-    type,
-    severity,
-    source,
-    title,
-    description,
-    meta,
+    type, severity, source, title, description, meta,
     timestamp: new Date().toISOString(),
   });
-
-  // keep only the latest 500 events
-  if (auditStore.length > 500) {
-    auditStore = auditStore.slice(0, 500);
-  }
+  if (auditStore.length > 500) auditStore = auditStore.slice(0, 500);
 }
 
 function addAlert({ title, description, severity, source }) {
@@ -190,57 +186,26 @@ function addAlert({ title, description, severity, source }) {
 
   const alert = {
     id: `alert-${alertIdCounter++}`,
-    title,
-    description,
-    severity,
-    source,
+    title, description, severity, source,
     timestamp: new Date().toISOString(),
     acknowledged: false,
   };
-
   alertStore.push(alert);
 
-  addAuditEvent({
-    type: 'alert_created',
-    severity,
-    source,
-    title,
-    description,
-    meta: { alertId: alert.id },
-  });
-
+  addAuditEvent({ type: 'alert_created', severity, source, title, description, meta: { alertId: alert.id } });
   broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
 }
 
 function resolveAlert(title, source) {
-  const matching = alertStore.filter(
-    a => a.title === title && a.source === source && !a.acknowledged
-  );
-
-  if (matching.length > 0) {
-    matching.forEach(a => {
-      addAuditEvent({
-        type: 'alert_resolved',
-        severity: a.severity,
-        source: a.source,
-        title: a.title,
-        description: a.description,
-        meta: { alertId: a.id },
-      });
-    });
-  }
+  const matching = alertStore.filter(a => a.title === title && a.source === source && !a.acknowledged);
+  matching.forEach(a => addAuditEvent({ type: 'alert_resolved', severity: a.severity, source: a.source, title: a.title, description: a.description, meta: { alertId: a.id } }));
 
   const before = alertStore.filter(a => !a.acknowledged).length;
   alertStore = alertStore.map(a =>
-    a.title === title && a.source === source && !a.acknowledged
-      ? { ...a, acknowledged: true }
-      : a
+    a.title === title && a.source === source && !a.acknowledged ? { ...a, acknowledged: true } : a
   );
   const after = alertStore.filter(a => !a.acknowledged).length;
-
-  if (before !== after) {
-    broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
-  }
+  if (before !== after) broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
 }
 
 // ─────────────────────────────────────────────
@@ -277,39 +242,41 @@ function normalizeSeverity(s) {
 
 function checkThresholds(agentLabel, containers) {
   for (const c of containers) {
-    const name = `${c.name} (${agentLabel})`;
+    // Use container name only as source key (not agent label)
+    // so duplicate reports from agent-1 and agent-2 don't create double alerts
+    const src = c.name;
 
     if (c.status === 'exited' || c.status === 'dead') {
-      addAlert({ title: 'Container Down', description: `${c.name} on ${agentLabel} has stopped (state: ${c.status}).`, severity: 'critical', source: `${c.name}-${agentLabel}` });
+      addAlert({ title: 'Container Down', description: `${c.name} has stopped (state: ${c.status}).`, severity: 'critical', source: `down-${src}` });
     } else {
-      resolveAlert('Container Down', `${c.name}-${agentLabel}`);
+      resolveAlert('Container Down', `down-${src}`);
     }
 
     if (c.status === 'restarting') {
-      addAlert({ title: 'Container Restarting', description: `${c.name} on ${agentLabel} is in a restart loop.`, severity: 'warning', source: `${c.name}-${agentLabel}` });
+      addAlert({ title: 'Container Restarting', description: `${c.name} is in a restart loop.`, severity: 'warning', source: `restart-${src}` });
     } else {
-      resolveAlert('Container Restarting', `${c.name}-${agentLabel}`);
+      resolveAlert('Container Restarting', `restart-${src}`);
     }
 
     if (c.cpuPct != null) {
       if (c.cpuPct >= THRESHOLDS.cpuCrit) {
-        addAlert({ title: 'Critical CPU Usage', description: `${c.name} on ${agentLabel} is using ${c.cpuPct}% CPU.`, severity: 'critical', source: `cpu-${c.name}-${agentLabel}` });
+        addAlert({ title: 'Critical CPU Usage', description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'critical', source: `cpu-${src}` });
       } else if (c.cpuPct >= THRESHOLDS.cpuWarn) {
-        addAlert({ title: 'High CPU Usage', description: `${c.name} on ${agentLabel} is using ${c.cpuPct}% CPU.`, severity: 'warning', source: `cpu-${c.name}-${agentLabel}` });
+        addAlert({ title: 'High CPU Usage', description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'warning', source: `cpu-${src}` });
       } else {
-        resolveAlert('Critical CPU Usage', `cpu-${c.name}-${agentLabel}`);
-        resolveAlert('High CPU Usage', `cpu-${c.name}-${agentLabel}`);
+        resolveAlert('Critical CPU Usage', `cpu-${src}`);
+        resolveAlert('High CPU Usage', `cpu-${src}`);
       }
     }
 
     if (c.memPct != null) {
       if (c.memPct >= THRESHOLDS.memCrit) {
-        addAlert({ title: 'Critical Memory Usage', description: `${c.name} on ${agentLabel} is using ${c.memPct}% memory.`, severity: 'critical', source: `mem-${c.name}-${agentLabel}` });
+        addAlert({ title: 'Critical Memory Usage', description: `${c.name} is using ${c.memPct}% memory.`, severity: 'critical', source: `mem-${src}` });
       } else if (c.memPct >= THRESHOLDS.memWarn) {
-        addAlert({ title: 'High Memory Usage', description: `${c.name} on ${agentLabel} is using ${c.memPct}% memory.`, severity: 'warning', source: `mem-${c.name}-${agentLabel}` });
+        addAlert({ title: 'High Memory Usage', description: `${c.name} is using ${c.memPct}% memory.`, severity: 'warning', source: `mem-${src}` });
       } else {
-        resolveAlert('Critical Memory Usage', `mem-${c.name}-${agentLabel}`);
-        resolveAlert('High Memory Usage', `mem-${c.name}-${agentLabel}`);
+        resolveAlert('Critical Memory Usage', `mem-${src}`);
+        resolveAlert('High Memory Usage', `mem-${src}`);
       }
     }
   }
@@ -619,37 +586,17 @@ app.get('/api/audit', (req, res) => {
 app.post('/api/alerts/:id/acknowledge', (req, res) => {
   const alert = alertStore.find(a => a.id === req.params.id);
   if (!alert) return res.status(404).json({ error: 'Not found' });
-
   alert.acknowledged = true;
-
-  addAuditEvent({
-    type: 'alert_acknowledged',
-    severity: alert.severity,
-    source: alert.source,
-    title: alert.title,
-    description: alert.description,
-    meta: { alertId: alert.id },
-  });
-
+  addAuditEvent({ type: 'alert_acknowledged', severity: alert.severity, source: alert.source, title: alert.title, description: alert.description, meta: { alertId: alert.id } });
   broadcast('alerts:update', alertStore.filter(a => !a.acknowledged));
   res.json({ ok: true });
 });
 
 // POST /api/alerts/acknowledge-all
 app.post('/api/alerts/acknowledge-all', (req, res) => {
-  const activeAlerts = alertStore.filter(a => !a.acknowledged);
-
-  activeAlerts.forEach(alert => {
-    addAuditEvent({
-      type: 'alert_acknowledged',
-      severity: alert.severity,
-      source: alert.source,
-      title: alert.title,
-      description: alert.description,
-      meta: { alertId: alert.id, bulk: true },
-    });
+  alertStore.filter(a => !a.acknowledged).forEach(alert => {
+    addAuditEvent({ type: 'alert_acknowledged', severity: alert.severity, source: alert.source, title: alert.title, description: alert.description, meta: { alertId: alert.id, bulk: true } });
   });
-
   alertStore = alertStore.map(a => ({ ...a, acknowledged: true }));
   broadcast('alerts:update', []);
   res.json({ ok: true });
@@ -666,14 +613,7 @@ app.get('/api/vulnerabilities', async (req, res) => {
       .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
 
     console.log(`[Vuln] Scanning ${targets.length} images concurrently...`);
-    addAuditEvent({
-      type: 'vulnerability_scan_started',
-      severity: 'info',
-      source: 'vulnerability-scanner',
-      title: 'Vulnerability Scan Started',
-      description: `Started vulnerability scan for ${targets.length} image(s).`,
-      meta: { targetCount: targets.length },
-    });
+    addAuditEvent({ type: 'vulnerability_scan_started', severity: 'info', source: 'vulnerability-scanner', title: 'Vulnerability Scan Started', description: `Started vulnerability scan for ${targets.length} image(s).` });
     const scanResults = await Promise.allSettled(
       targets.map(({ image }) => scanImageInWorker(image))
     );
@@ -723,23 +663,11 @@ app.get('/api/vulnerabilities', async (req, res) => {
 // GET /api/compliance
 app.get('/api/compliance', async (req, res) => {
   await acquireTrivyLock();
-
   try {
-
-    addAuditEvent({
-      type: 'compliance_scan_started',
-      severity: 'info',
-      source: 'compliance-checker',
-      title: 'Compliance Scan Started',
-      description: 'Started CIS Docker Benchmark compliance scan.'
-    });
-
+    addAuditEvent({ type: 'compliance_scan_started', severity: 'info', source: 'compliance-checker', title: 'Compliance Scan Started', description: 'Started CIS Docker Benchmark compliance scan.' });
     const { results, overallScore } = await runComplianceChecks();
-
-    cachedComplianceScore = overallScore;
-
+    cachedComplianceScore = overallScore; // update cache
     res.json({ results, overallScore });
-
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
@@ -758,14 +686,7 @@ app.get('/api/secrets', async (req, res) => {
       .filter(t => { if (seen.has(t.image)) return false; seen.add(t.image); return true; });
 
     console.log(`[Secrets] Scanning ${targets.length} images concurrently...`);
-    addAuditEvent({
-      type: 'secrets_scan_started',
-      severity: 'info',
-      source: 'secrets-scanner',
-      title: 'Secrets Scan Started',
-      description: `Started secrets scan for ${targets.length} image(s).`,
-      meta: { targetCount: targets.length },
-    });
+    addAuditEvent({ type: 'secrets_scan_started', severity: 'info', source: 'secrets-scanner', title: 'Secrets Scan Started', description: `Started secrets scan for ${targets.length} image(s).` });
     const scanResults = await Promise.allSettled(
       targets.map(({ image }) => scanSecretsInWorker(image))
     );
@@ -829,7 +750,7 @@ app.get('/api/stats', async (req, res) => {
     const activeAlerts = alertStore.filter(a => !a.acknowledged).length;
     const onlineAgents = Array.from(agentRegistry.values()).filter(a => a.status === 'online').length;
 
-    res.json({ totalContainers, criticalVulns: null, complianceScore: cachedComplianceScore, threatsBlocked: activeAlerts, onlineAgents });
+    res.json({ totalContainers, criticalVulns: null, complianceScore: cachedComplianceScore, activeAlerts: activeAlerts, onlineAgents });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

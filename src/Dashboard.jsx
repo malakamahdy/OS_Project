@@ -165,6 +165,28 @@ function useSecrets() {
   return { secrets, loading, scanned, scan };
 }
 
+function useAudit(socket) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    fetch('http://localhost:3002/api/audit')
+      .then(res => res.json())
+      .then(data => { setEvents(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    // Refresh audit log whenever alerts update (new events may have been logged)
+    socket.on('alerts:update', () => load());
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return { events, loading };
+}
+
 // ─────────────────────────────────────────────
 // DESIGN TOKENS
 // ─────────────────────────────────────────────
@@ -530,7 +552,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
         <StatCard label="Containers Active" value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} />
         <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} />
         <StatCard label="Compliance Score" value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} />
-        <StatCard label="Threats Blocked" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
+        <StatCard label="Active Alerts" value={ls ? "…" : stats?.activeAlerts} icon={Shield} accent={C.amber} />
       </div>
 
       {/* ROW 1 */}
@@ -1090,6 +1112,117 @@ function SecretsPage({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// PAGE: AUDIT LOG
+// ─────────────────────────────────────────────
+
+const AUDIT_TYPE_LABEL = {
+  alert_created:            { label: 'Alert Created',       color: null },
+  alert_resolved:           { label: 'Alert Resolved',      color: null },
+  alert_acknowledged:       { label: 'Alert Dismissed',     color: null },
+  vulnerability_scan_started: { label: 'Vuln Scan',         color: null },
+  compliance_scan_started:  { label: 'Compliance Scan',     color: null },
+  secrets_scan_started:     { label: 'Secrets Scan',        color: null },
+};
+
+function AuditPage({ socket, onBack }) {
+  const { events, loading } = useAudit(socket);
+  const [filter, setFilter] = useState('all');
+
+  const filtered = filter === 'all' ? events : events.filter(e => {
+    if (filter === 'alerts') return e.type.startsWith('alert_');
+    if (filter === 'scans') return e.type.includes('scan');
+    return e.severity === filter;
+  });
+
+  const typeInfo = (type) => AUDIT_TYPE_LABEL[type] || { label: type, color: null };
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Audit Log</div>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>{events.length} EVENTS</Mono>
+      </div>
+
+      {/* Filter tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[
+          { key: 'all',    label: 'All' },
+          { key: 'alerts', label: 'Alerts' },
+          { key: 'scans',  label: 'Scans' },
+          { key: 'critical', label: 'Critical' },
+          { key: 'warning',  label: 'Warning' },
+          { key: 'info',     label: 'Info' },
+        ].map(f => (
+          <button key={f.key} onClick={() => setFilter(f.key)} style={{ fontFamily: mono, fontSize: 9, padding: "5px 13px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.1em", textTransform: "uppercase", background: filter === f.key ? `${C.cyan}18` : "transparent", color: filter === f.key ? C.cyan : C.textDim, border: `1px solid ${filter === f.key ? C.cyan : C.border}`, transition: "all 0.12s" }}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <Panel title="Security Event Log" icon={List}>
+        {loading ? <Loading /> : filtered.length === 0 ? (
+          <EmptyState icon={List} message="NO AUDIT EVENTS YET" />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={TH}>Time</th>
+                  <th style={TH}>Type</th>
+                  <th style={TH}>Severity</th>
+                  <th style={TH}>Title</th>
+                  <th style={TH}>Description</th>
+                  <th style={TH}>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(e => {
+                  const sevColor = ALERT_COLOR[e.severity] || C.textDim;
+                  const { label } = typeInfo(e.type);
+                  const isAlert = e.type.startsWith('alert_');
+                  const isScan = e.type.includes('scan');
+                  const typeColor = isAlert ? C.amber : isScan ? C.cyan : C.textDim;
+
+                  return (
+                    <tr key={e.id}
+                      onMouseEnter={el => el.currentTarget.style.background = C.surface2}
+                      onMouseLeave={el => el.currentTarget.style.background = "transparent"}>
+                      <td style={TD}>
+                        <Mono size={10} color={C.textDim}>
+                          {e.timestamp ? new Date(e.timestamp).toLocaleString() : "—"}
+                        </Mono>
+                      </td>
+                      <td style={TD}>
+                        <span style={{ fontFamily: mono, fontSize: 9, padding: "2px 8px", borderRadius: 3, background: `${typeColor}18`, color: typeColor, border: `1px solid ${typeColor}44`, letterSpacing: "0.08em" }}>
+                          {label}
+                        </span>
+                      </td>
+                      <td style={TD}><SeverityBadge severity={e.severity} /></td>
+                      <td style={TD}>
+                        <span style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright }}>{e.title}</span>
+                      </td>
+                      <td style={TD}>
+                        <span style={{ fontFamily: sans, fontSize: 11, color: C.text }}>{e.description}</span>
+                      </td>
+                      <td style={TD}>
+                        <Mono size={10} color={C.textDim}>{e.source || "—"}</Mono>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -1118,7 +1251,6 @@ export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [dark, setDark] = useState(true);
 
-  // Update global C whenever theme changes
   C = getTheme(dark);
 
   const socket = useSocket();
@@ -1131,9 +1263,210 @@ export default function Dashboard() {
   const { stats, loading: ls }         = useStats();
   const { scans, loading: lsc }        = useScanHistory();
 
+  // ── Export report ──────────────────────────
+  const handleExport = async () => {
+    const now = new Date();
+    const fmt = (d) => new Date(d).toLocaleString();
+
+    let auditEvents = [];
+    try {
+      const r = await fetch('http://localhost:3002/api/audit');
+      auditEvents = await r.json();
+    } catch { /* skip */ }
+
+    const onlineAgents = agents.filter(a => a.status === 'online');
+    const criticalVulns = vulnerabilities.filter(v => v.severity === 'critical');
+    const highVulns = vulnerabilities.filter(v => v.severity === 'high');
+    const activeAlerts = alerts.filter(a => !a.acknowledged);
+
+    // Load jsPDF and html2canvas from CDN
+    const loadScript = (src) => new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`)) return resolve();
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+
+    const { jsPDF } = window.jspdf;
+
+    // Build a hidden div with report content
+    const container = document.createElement('div');
+    container.style.cssText = `
+      position: fixed; left: -9999px; top: 0;
+      width: 794px; background: white;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #0f172a; padding: 40px;
+    `;
+
+    const badge = (sev) => {
+      const colors = { critical: '#e11d48', high: '#d97706', medium: '#0284c7', low: '#059669', info: '#0284c7', warning: '#d97706' };
+      const c = colors[sev] || '#64748b';
+      return `<span style="display:inline-block;font-size:9px;font-family:monospace;font-weight:700;padding:2px 7px;border-radius:3px;letter-spacing:0.1em;background:${c}22;color:${c};border:1px solid ${c}55">${(sev||'').toUpperCase()}</span>`;
+    };
+
+    const section = (title, count, tableHtml) => `
+      <div style="margin-bottom:24px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
+          <span style="font-size:13px;font-weight:600">${title}</span>
+          <span style="font-size:10px;font-family:monospace;color:#64748b;background:#e2e8f0;padding:2px 8px;border-radius:10px">${count}</span>
+        </div>
+        ${tableHtml}
+      </div>`;
+
+    const table = (headers, rows) => rows.length === 0
+      ? `<div style="padding:24px;text-align:center;font-family:monospace;font-size:11px;color:#94a3b8">NO DATA</div>`
+      : `<table style="width:100%;border-collapse:collapse">
+          <thead><tr>${headers.map(h => `<th style="font-size:9px;font-family:monospace;letter-spacing:0.12em;text-transform:uppercase;color:#64748b;text-align:left;padding:8px 12px;border-bottom:1px solid #e2e8f0;background:#f8fafc;font-weight:400">${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(cells => `<tr>${cells.map((c,i) => `<td style="padding:8px 12px;font-size:11px;border-bottom:1px solid #f1f5f9;vertical-align:top${i===0?';white-space:nowrap':''}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>`;
+
+    const compScore = stats?.complianceScore;
+    const scoreColor = compScore >= 85 ? '#059669' : compScore >= 60 ? '#d97706' : '#e11d48';
+
+    container.innerHTML = `
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:28px 32px;background:#0d1117;border-radius:10px;margin-bottom:28px">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#f8fafc;margin-bottom:4px">ContainerShield Security Report</div>
+          <div style="font-size:10px;color:#7c93ad;font-family:monospace;letter-spacing:0.1em">GENERATED ${now.toLocaleString().toUpperCase()}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:34px;font-weight:700;color:#34d399;font-family:monospace">${compScore != null ? compScore + '%' : '—'}</div>
+          <div style="font-size:10px;color:#7c93ad;font-family:monospace;letter-spacing:0.1em;margin-top:2px">COMPLIANCE SCORE</div>
+        </div>
+      </div>
+
+      <!-- Stat cards -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px">
+        ${[
+          { label: 'Containers Active', value: stats?.totalContainers ?? containers.length, color: '#0284c7' },
+          { label: 'Critical Vulns',    value: criticalVulns.length,                        color: '#e11d48' },
+          { label: 'Active Alerts',     value: activeAlerts.length,                          color: '#d97706' },
+          { label: 'Agents Online',     value: `${onlineAgents.length}/${agents.length}`,    color: '#059669' },
+        ].map(s => `
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:16px;border-top:3px solid ${s.color}">
+            <div style="font-size:28px;font-weight:700;color:${s.color};font-family:monospace;margin-bottom:4px">${s.value}</div>
+            <div style="font-size:9px;color:#64748b;font-family:monospace;letter-spacing:0.15em;text-transform:uppercase">${s.label}</div>
+          </div>`).join('')}
+      </div>
+
+      ${section('Monitoring Agents', `${agents.length} AGENTS`,
+        table(
+          ['Agent', 'Status', 'Containers', 'CPUs', 'Memory', 'Last Seen'],
+          agents.map(a => [
+            `<strong>${a.agentLabel}</strong><br><span style="font-family:monospace;font-size:10px;color:#64748b">${a.agentId}</span>`,
+            badge(a.status === 'online' ? 'low' : 'critical') + ' ' + a.status.toUpperCase(),
+            a.containerCount ?? '—',
+            a.hostInfo?.cpuCount ?? '—',
+            a.hostInfo?.totalMemMb ? Math.round(a.hostInfo.totalMemMb / 1024) + ' GB' : '—',
+            `<span style="font-family:monospace;font-size:10px">${a.lastSeen ? fmt(a.lastSeen) : '—'}</span>`,
+          ])
+        )
+      )}
+
+      ${section(`Active Alerts`, `${activeAlerts.length} ACTIVE`,
+        table(
+          ['Severity', 'Title', 'Description', 'Time'],
+          activeAlerts.map(a => [badge(a.severity), `<strong>${a.title}</strong>`, a.description, `<span style="font-family:monospace;font-size:10px">${fmt(a.timestamp)}</span>`])
+        )
+      )}
+
+      ${section(`Network Threats`, `${threats.length} DETECTED`,
+        table(
+          ['Severity', 'Title', 'Description', 'Container'],
+          threats.map(t => [badge(t.severity), `<strong>${t.title}</strong>`, t.description, `<span style="font-family:monospace;font-size:10px">${t.source?.replace('network-agent:','') || '—'}</span>`])
+        )
+      )}
+
+      ${section(`Vulnerabilities`, `${vulnerabilities.length} TOTAL · ${criticalVulns.length} CRITICAL`,
+        table(
+          ['Severity', 'CVE', 'Container', 'Package', 'Version', 'CVSS'],
+          vulnerabilities.slice(0, 40).map(v => [badge(v.severity), `<span style="font-family:monospace;font-size:10px">${v.cveId}</span>`, v.container, v.package, `<span style="font-family:monospace;font-size:10px">${v.version}</span>`, v.cvss ?? '—'])
+        )
+      )}
+
+      ${section(`Compliance — CIS Docker Benchmark 1.6.0`, compScore != null ? compScore + '% OVERALL' : 'NOT SCANNED',
+        compliance.length === 0
+          ? `<div style="padding:24px;text-align:center;font-family:monospace;font-size:11px;color:#94a3b8">OPEN COMPLIANCE PAGE FIRST</div>`
+          : table(
+              ['Category', 'Standard', 'Score', 'Passed', 'Failed'],
+              compliance.map(c => {
+                const col = c.passPct >= 85 ? '#059669' : c.passPct >= 60 ? '#d97706' : '#e11d48';
+                return [
+                  `<strong>${c.name}</strong>`,
+                  `<span style="font-family:monospace;font-size:10px">${c.standard}</span>`,
+                  `<span style="color:${col};font-weight:700;font-family:monospace">${c.passPct}%</span>`,
+                  `<span style="color:#059669;font-family:monospace">${c.passCount}</span>`,
+                  `<span style="color:#e11d48;font-family:monospace">${c.totalCount - c.passCount}</span>`,
+                ];
+              })
+            )
+      )}
+
+      ${section(`Audit Log`, `${auditEvents.length} EVENTS`,
+        table(
+          ['Time', 'Type', 'Severity', 'Title', 'Source'],
+          auditEvents.slice(0, 60).map(e => [
+            `<span style="font-family:monospace;font-size:10px">${fmt(e.timestamp)}</span>`,
+            `<span style="font-family:monospace;font-size:10px">${e.type}</span>`,
+            badge(e.severity),
+            e.title,
+            `<span style="font-family:monospace;font-size:10px">${e.source || '—'}</span>`,
+          ])
+        )
+      )}
+
+      <div style="text-align:center;margin-top:32px;font-family:monospace;font-size:10px;color:#94a3b8;letter-spacing:0.08em">
+        CONTAINERSHIELD SECURITY PLATFORM · ${now.toISOString()} · CONFIDENTIAL
+      </div>
+    `;
+
+    document.body.appendChild(container);
+
+    try {
+      const canvas = await window.html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        width: 794,
+      });
+
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'px', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW;
+      const imgH = (canvas.height * pageW) / canvas.width;
+
+      let y = 0;
+      let remaining = imgH;
+
+      while (remaining > 0) {
+        const sliceH = Math.min(pageH, remaining);
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = canvas.width;
+        sliceCanvas.height = (sliceH / imgH) * canvas.height;
+        const ctx = sliceCanvas.getContext('2d');
+        ctx.drawImage(canvas, 0, (y / imgH) * canvas.height, canvas.width, sliceCanvas.height, 0, 0, canvas.width, sliceCanvas.height);
+        const sliceImg = sliceCanvas.toDataURL('image/png');
+        if (y > 0) pdf.addPage();
+        pdf.addImage(sliceImg, 'PNG', 0, 0, imgW, sliceH);
+        y += sliceH;
+        remaining -= sliceH;
+      }
+
+      pdf.save(`containershield-report-${now.toISOString().slice(0, 10)}.pdf`);
+    } finally {
+      document.body.removeChild(container);
+    }
+  };
+
   const PAGE_TITLES = {
     reports:    { title: "Reports",        Icon: FileText },
-    audit:      { title: "Audit Log",      Icon: List },
     config:     { title: "Configuration",  Icon: Settings },
     team:       { title: "Team",           Icon: Users },
   };
@@ -1152,6 +1485,8 @@ export default function Dashboard() {
         return <MonitorPage containers={containers} agents={agents} loading={lcont} onBack={() => setActiveNav("dashboard")} />;
       case "secrets":
         return <SecretsPage onBack={() => setActiveNav("dashboard")} />;
+      case "audit":
+        return <AuditPage socket={socket} onBack={() => setActiveNav("dashboard")} />;
       default:
         const p = PAGE_TITLES[activeNav];
         return p ? <PlaceholderPage title={p.title} icon={p.Icon} onBack={() => setActiveNav("dashboard")} /> : null;
@@ -1171,7 +1506,7 @@ export default function Dashboard() {
           dark={dark}
           onToggleDark={() => setDark(d => !d)}
           onScan={() => setActiveNav("vulns")}
-          onExport={() => console.log("TODO: export")}
+          onExport={handleExport}
           onAcknowledge={acknowledge}
           onAcknowledgeAll={acknowledgeAll}
         />
