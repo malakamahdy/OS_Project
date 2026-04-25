@@ -282,6 +282,31 @@ function HealthDot({ health }) {
   return <span style={{ width: 8, height: 8, borderRadius: "50%", display: "inline-block", flexShrink: 0, background: color, boxShadow: `0 0 8px ${color}` }} />;
 }
 
+function Sparkline({ data, color, width = 80, height = 28 }) {
+  if (!data || data.length < 2) {
+    return <svg width={width} height={height}><line x1="0" y1={height/2} x2={width} y2={height/2} stroke={C.border2} strokeWidth="1" strokeDasharray="3 2"/></svg>;
+  }
+  const max = Math.max(...data, 1);
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - (v / max) * (height - 2) - 1;
+    return `${x},${y}`;
+  }).join(' ');
+  const fillPts = `0,${height} ${pts} ${width},${height}`;
+  return (
+    <svg width={width} height={height} style={{ overflow: 'visible' }}>
+      <defs>
+        <linearGradient id={`sg-${color.replace('#','')}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      <polygon points={fillPts} fill={`url(#sg-${color.replace('#','')})`}/>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
 function EmptyState({ icon: Icon, message }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 20px", gap: 12 }}>
@@ -464,12 +489,7 @@ const NAV = [
   ]},
   { section: "Compliance", items: [
     { key: "compliance", label: "Compliance",   Icon: CheckCircle },
-    { key: "reports",    label: "Reports",      Icon: FileText },
     { key: "audit",      label: "Audit Log",    Icon: List },
-  ]},
-  { section: "System", items: [
-    { key: "config",     label: "Config",       Icon: Settings },
-    { key: "team",       label: "Team",         Icon: Users },
   ]},
 ];
 
@@ -558,7 +578,7 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
           <Download size={12} strokeWidth={1.5} /> EXPORT
         </button>
         <button onClick={onScan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
-          <Play size={11} strokeWidth={2} /> RUN SCAN
+          <Play size={11} strokeWidth={2} /> RUN VULNERABILITY SCAN
         </button>
 
         <div style={{ position: "relative" }}>
@@ -635,7 +655,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
         <StatCard label="Containers Active" value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} />
         <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} />
         <StatCard label="Compliance Score" value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} />
-        <StatCard label="Threats Blocked" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
+        <StatCard label="Active Alerts" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
       </div>
 
       {/* ROW 1 */}
@@ -849,7 +869,7 @@ function MonitorPage({ containers, agents, loading, onBack }) {
       {agents.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <Panel title="Monitoring Agents" icon={Activity}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 1, background: C.border }}>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(agents.length, 3)}, 1fr)`, gap: 1, background: C.border }}>
               {agents.map(a => (
                 <div key={a.agentId} style={{ background: C.surface, padding: "16px 18px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -863,11 +883,24 @@ function MonitorPage({ containers, agents, loading, onBack }) {
                     <div><Mono size={9}>CONTAINERS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.containerCount ?? "—"}</div></div>
                     {a.hostInfo && <>
                       <div><Mono size={9}>CPUS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.cpuCount}</div></div>
-                      <div><Mono size={9}>MEM FREE</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.freeMemMb}MB</div></div>
+                      <div><Mono size={9}>VM MEM FREE</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.freeMemMb}MB</div></div>
                     </>}
                   </div>
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <Mono size={9} color={C.textDim}>LAST SEEN: {a.lastSeen ? new Date(a.lastSeen).toLocaleTimeString() : "—"}</Mono>
+                    {a.status === 'offline' && (
+                      <button
+                        onClick={() => {
+                          fetch(`http://localhost:3002/api/containers/${a.agentId}/start`, { method: 'POST' })
+                            .catch(() => {
+                              // Try by name if id fails
+                              fetch(`http://localhost:3002/api/containers/cs-${a.agentId}/start`, { method: 'POST' });
+                            });
+                        }}
+                        style={{ fontFamily: mono, fontSize: 8, padding: "3px 8px", borderRadius: 3, cursor: "pointer", letterSpacing: "0.08em", background: "rgba(52,211,153,0.08)", color: C.green, border: `1px solid ${C.green}44` }}>
+                        BRING ONLINE
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -879,7 +912,7 @@ function MonitorPage({ containers, agents, loading, onBack }) {
       <Panel title="All Containers" icon={Box}>
         {loading ? <Loading /> : containers.length === 0 ? <EmptyState icon={Box} message="NO CONTAINERS DETECTED" /> :
           containers.map(c => (
-            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderBottom: `1px solid ${C.border}`, transition: "background 0.1s" }}
+            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, transition: "background 0.1s" }}
               onMouseEnter={e => e.currentTarget.style.background = C.surface2}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <HealthDot health={c.health} />
@@ -887,16 +920,70 @@ function MonitorPage({ containers, agents, loading, onBack }) {
                 <div style={{ fontFamily: mono, fontSize: 12, color: C.textBright, fontWeight: 600 }}>{c.name || c.id}</div>
                 <Mono size={10} color={C.textDim}>{c.image}:{c.tag} · {c.agentLabel || c.env} · {c.status}</Mono>
               </div>
-              <div style={{ display: "flex", gap: 24 }}>
-                <div style={{ textAlign: "right" }}>
-                  <Mono size={9} color={C.textDim}>CPU</Mono>
-                  <div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{c.cpuPct != null ? `${c.cpuPct}%` : "—"}</div>
+
+              {/* CPU Sparkline */}
+              <div style={{ textAlign: "center" }}>
+                <Mono size={9} color={C.textDim}>CPU</Mono>
+                <div style={{ marginTop: 2 }}>
+                  <Sparkline data={(c.history || []).map(h => h.cpu)} color={C.cyan} />
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <Mono size={9} color={C.textDim}>MEM</Mono>
-                  <div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{c.memPct != null ? `${c.memPct}%` : "—"}</div>
-                </div>
+                <Mono size={10} color={C.textBright}>{c.cpuPct != null ? `${c.cpuPct}%` : "—"}</Mono>
               </div>
+
+              {/* MEM Sparkline */}
+              <div style={{ textAlign: "center" }}>
+                <Mono size={9} color={C.textDim}>MEM</Mono>
+                <div style={{ marginTop: 2 }}>
+                  <Sparkline data={(c.history || []).map(h => h.mem)} color={C.green} />
+                </div>
+                <Mono size={10} color={C.textBright}>{c.memPct != null ? `${c.memPct}%` : "—"}</Mono>
+              </div>
+
+              {/* Actions */}
+              {c.status === 'running' ? (
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Restart ${c.name}?`)) {
+                        fetch(`http://localhost:3002/api/containers/${c.id}/restart`, { method: 'POST' })
+                          .then(() => console.log(`Restarted ${c.name}`))
+                          .catch(err => alert('Failed: ' + err.message));
+                      }
+                    }}
+                    style={{ fontFamily: mono, fontSize: 9, padding: "4px 10px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.08em", background: "rgba(56,189,248,0.08)", color: C.cyan, border: `1px solid ${C.cyan}44`, transition: "all 0.12s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = `rgba(56,189,248,0.18)`; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = `rgba(56,189,248,0.08)`; }}>
+                    RESTART
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Stop ${c.name}? This will take it offline.`)) {
+                        fetch(`http://localhost:3002/api/containers/${c.id}/stop`, { method: 'POST' })
+                          .then(() => console.log(`Stopped ${c.name}`))
+                          .catch(err => alert('Failed: ' + err.message));
+                      }
+                    }}
+                    style={{ fontFamily: mono, fontSize: 9, padding: "4px 10px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.08em", background: "rgba(251,113,133,0.08)", color: C.red, border: `1px solid ${C.red}44`, transition: "all 0.12s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = `rgba(251,113,133,0.18)`; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = `rgba(251,113,133,0.08)`; }}>
+                    STOP
+                  </button>
+                </div>
+              ) : c.status === 'exited' || c.status === 'stopped' ? (
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button
+                    onClick={() => {
+                      fetch(`http://localhost:3002/api/containers/${c.id}/start`, { method: 'POST' })
+                        .then(() => console.log(`Started ${c.name}`))
+                        .catch(err => alert('Failed: ' + err.message));
+                    }}
+                    style={{ fontFamily: mono, fontSize: 9, padding: "4px 10px", borderRadius: 4, cursor: "pointer", letterSpacing: "0.08em", background: "rgba(52,211,153,0.08)", color: C.green, border: `1px solid ${C.green}44`, transition: "all 0.12s" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = `rgba(52,211,153,0.18)`; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = `rgba(52,211,153,0.08)`; }}>
+                    START
+                  </button>
+                </div>
+              ) : null}
             </div>
           ))
         }

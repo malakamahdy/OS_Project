@@ -107,6 +107,26 @@ function getAgentSummary() {
   }));
 }
 
+// ─────────────────────────────────────────────
+// CONTAINER HISTORY
+// Keeps last 60 data points (10 min at 10s interval)
+// per container for sparkline charts
+// ─────────────────────────────────────────────
+
+const containerHistory = new Map();
+// containerName → [{ ts, cpu, mem }, ...]
+
+function updateContainerHistory(containers) {
+  const ts = Date.now();
+  for (const c of containers) {
+    if (c.cpuPct == null && c.memPct == null) continue;
+    if (!containerHistory.has(c.name)) containerHistory.set(c.name, []);
+    const hist = containerHistory.get(c.name);
+    hist.push({ ts, cpu: c.cpuPct ?? 0, mem: c.memPct ?? 0 });
+    if (hist.length > 60) hist.shift();
+  }
+}
+
 function getAllContainersFromAgents() {
   const seen = new Set();
   const all = [];
@@ -115,7 +135,13 @@ function getAllContainersFromAgents() {
       for (const c of agent.containers || []) {
         if (!seen.has(c.name)) {
           seen.add(c.name);
-          all.push({ ...c, agentId: agent.agentId, agentLabel: agent.agentLabel, env: agent.agentLabel });
+          all.push({
+            ...c,
+            agentId: agent.agentId,
+            agentLabel: agent.agentLabel,
+            env: agent.agentLabel,
+            history: containerHistory.get(c.name) || [],
+          });
         }
       }
     }
@@ -518,6 +544,7 @@ app.post('/api/agent/report', (req, res) => {
       }
     } else {
       // agent-1 and agent-2 send container metrics
+      updateContainerHistory(payload.containers || []);
       checkThresholds(payload.agentLabel, payload.containers || []);
     }
 
@@ -764,6 +791,51 @@ app.get('/api/stats', async (req, res) => {
 // GET /api/health
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), agents: getAgentSummary().length });
+});
+
+// POST /api/containers/:id/restart
+app.post('/api/containers/:id/restart', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.id);
+    await container.restart();
+    const info = await container.inspect();
+    const name = info.Name.replace(/^\//, '');
+    addAuditEvent({ type: 'container_restarted', severity: 'info', source: 'dashboard', title: 'Container Restarted', description: `Container "${name}" was restarted from the dashboard.` });
+    console.log(`[Action] Restarted container: ${name}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/containers/:id/stop
+app.post('/api/containers/:id/stop', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.id);
+    const info = await container.inspect();
+    const name = info.Name.replace(/^\//, '');
+    await container.stop();
+    addAuditEvent({ type: 'container_stopped', severity: 'warning', source: 'dashboard', title: 'Container Stopped', description: `Container "${name}" was stopped from the dashboard.` });
+    console.log(`[Action] Stopped container: ${name}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/containers/:id/start
+app.post('/api/containers/:id/start', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.id);
+    await container.start();
+    const info = await container.inspect();
+    const name = info.Name.replace(/^\//, '');
+    addAuditEvent({ type: 'container_started', severity: 'info', source: 'dashboard', title: 'Container Started', description: `Container "${name}" was started from the dashboard.` });
+    console.log(`[Action] Started container: ${name}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────
