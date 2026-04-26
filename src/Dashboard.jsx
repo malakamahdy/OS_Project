@@ -207,24 +207,30 @@ const DARK = {
 };
 
 const LIGHT = {
-  bg:         "#f0f4f8",
-  surface:    "#ffffff",
-  surface2:   "#f0f4f8",
-  border:     "#d0dce8",
-  border2:    "#b0c4d8",
-  cyan:       "#0284c7",
-  red:        "#e11d48",
-  green:      "#059669",
-  amber:      "#d97706",
-  text:       "#1e293b",
-  textDim:    "#64748b",
-  textBright: "#0f172a",
+  bg:         "#faf6ef",
+  surface:    "#fffdf8",
+  surface2:   "#f5f0e5",
+  border:     "#e8dfc8",
+  border2:    "#d4c9b0",
+  cyan:       "#5b8fa8",
+  red:        "#c0392b",
+  green:      "#2e7d5e",
+  amber:      "#b5770d",
+  text:       "#4a3f33",
+  textDim:    "#9a8870",
+  textBright: "#2a2018",
 };
 
 let C = DARK;
 
 function getTheme(dark) {
   return dark ? DARK : LIGHT;
+}
+
+function applyTheme(dark) {
+  C = getTheme(dark);
+  TH = getTH();
+  TD = getTD();
 }
 
 const mono = "'JetBrains Mono', 'Fira Code', monospace";
@@ -354,8 +360,11 @@ function StatCard({ label, value, accent, icon: Icon }) {
 // TABLE
 // ─────────────────────────────────────────────
 
-const TH = { fontFamily: mono, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", color: C.textDim, textAlign: "left", padding: "10px 18px", borderBottom: `1px solid ${C.border}`, fontWeight: 400, background: C.surface2 };
-const TD = { padding: "12px 18px", fontSize: 12, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+const getTH = () => ({ fontFamily: mono, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", color: C.textDim, textAlign: "left", padding: "10px 18px", borderBottom: `1px solid ${C.border}`, fontWeight: 400, background: C.surface2 });
+const getTD = () => ({ padding: "12px 18px", fontSize: 12, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" });
+// Keep TH/TD as aliases for backward compat — components that use them inline will pick up current C
+let TH = getTH();
+let TD = getTD();
 
 function VulnTable({ rows }) {
   const [expanded, setExpanded] = useState(null);
@@ -489,7 +498,12 @@ const NAV = [
   ]},
   { section: "Compliance", items: [
     { key: "compliance", label: "Compliance",   Icon: CheckCircle },
+    { key: "reports",    label: "Reports",      Icon: FileText },
     { key: "audit",      label: "Audit Log",    Icon: List },
+  ]},
+  { section: "System", items: [
+    { key: "config",     label: "Config",       Icon: Settings },
+    { key: "team",       label: "Team",         Icon: Users },
   ]},
 ];
 
@@ -883,7 +897,7 @@ function MonitorPage({ containers, agents, loading, onBack }) {
                     <div><Mono size={9}>CONTAINERS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.containerCount ?? "—"}</div></div>
                     {a.hostInfo && <>
                       <div><Mono size={9}>CPUS</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.cpuCount}</div></div>
-                      <div><Mono size={9}>VM MEM FREE</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.freeMemMb}MB</div></div>
+                      <div><Mono size={9}>MEM FREE</Mono><div style={{ fontFamily: mono, fontSize: 14, color: C.textBright, marginTop: 2 }}>{a.hostInfo.freeMemMb}MB</div></div>
                     </>}
                   </div>
                   <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1393,6 +1407,258 @@ function AuditPage({ socket, onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// PAGE: CONFIG
+// ─────────────────────────────────────────────
+
+const DEFAULT_CONFIG = {
+  cpuWarning: 70, cpuCritical: 90,
+  memoryWarning: 75, memoryCritical: 90,
+  agentOfflineTimeout: 30,
+};
+
+function ConfigPage({ onBack }) {
+  const [settings, setSettings] = useState(DEFAULT_CONFIG);
+  const [saved, setSaved] = useState(false);
+  const saveTimeoutRef = useRef(null);
+
+  const updateSetting = (key, value) => { setSettings(c => ({ ...c, [key]: Number(value) })); setSaved(false); };
+  const saveSettings = () => { setSaved(true); if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = window.setTimeout(() => setSaved(false), 2200); };
+  const resetDefaults = () => { setSettings(DEFAULT_CONFIG); setSaved(false); };
+
+  const thresholdFields = [
+    { key: "cpuWarning",          label: "CPU Warning Threshold",          description: "Warn when container CPU usage crosses this percentage.",              severity: "warning"  },
+    { key: "cpuCritical",         label: "CPU Critical Threshold",         description: "Mark CPU health as critical above this percentage.",                  severity: "critical" },
+    { key: "memoryWarning",       label: "Memory Warning Threshold",       description: "Warn when memory utilization reaches this threshold.",                severity: "warning"  },
+    { key: "memoryCritical",      label: "Memory Critical Threshold",      description: "Escalate memory health to critical above this point.",               severity: "critical" },
+    { key: "agentOfflineTimeout", label: "Agent Offline Timeout (seconds)",description: "Consider an agent offline after this many seconds without a heartbeat.", severity: "info" },
+  ];
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Configuration</div>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>LOCAL SETTINGS ONLY</Mono>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
+        <Panel title="Threshold Settings" icon={Settings}>
+          <div style={{ padding: "18px" }}>
+            <div style={{ display: "grid", gap: 14 }}>
+              {thresholdFields.map(field => (
+                <div key={field.key} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                    <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: C.textBright }}>{field.label}</div>
+                    <SeverityBadge severity={field.severity} />
+                  </div>
+                  <div style={{ fontFamily: sans, fontSize: 12, color: C.textDim, lineHeight: 1.5, marginBottom: 12 }}>{field.description}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="number" value={settings[field.key]} onChange={e => updateSetting(field.key, e.target.value)}
+                      style={{ width: 120, background: C.bg, color: C.textBright, border: `1px solid ${C.border2}`, borderRadius: 5, padding: "9px 11px", fontFamily: mono, fontSize: 12, outline: "none" }} />
+                    <Mono size={9} color={C.textDim}>{field.key === "agentOfflineTimeout" ? "SECONDS" : "PERCENT"}</Mono>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Panel>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Panel title="Actions" icon={Play}>
+            <div style={{ padding: "18px" }}>
+              <Label>Save Config</Label>
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>Store the current thresholds in component state for this session.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <button onClick={saveSettings} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>SAVE SETTINGS</button>
+                <button onClick={resetDefaults} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: "pointer", letterSpacing: "0.05em" }}>RESET DEFAULTS</button>
+              </div>
+              <div style={{ minHeight: 18, marginTop: 10 }}>{saved && <Mono size={9} color={C.green}>SETTINGS SAVED LOCALLY</Mono>}</div>
+            </div>
+          </Panel>
+
+          <Panel title="Active Profile" icon={Shield}>
+            <div style={{ padding: "18px" }}>
+              <Label>Runtime Summary</Label>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}><Mono size={10} color={C.textDim}>CPU</Mono><Mono size={10} color={C.textBright}>{settings.cpuWarning}% WARN · {settings.cpuCritical}% CRIT</Mono></div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}><Mono size={10} color={C.textDim}>MEMORY</Mono><Mono size={10} color={C.textBright}>{settings.memoryWarning}% WARN · {settings.memoryCritical}% CRIT</Mono></div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}><Mono size={10} color={C.textDim}>AGENT TIMEOUT</Mono><Mono size={10} color={C.textBright}>{settings.agentOfflineTimeout} SECONDS</Mono></div>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PAGE: REPORTS
+// ─────────────────────────────────────────────
+
+function ReportsPage({ containers, vulnerabilities, alerts, compliance, stats, scans, ls, lv, la, lcomp, lsc, onBack, onExport }) {
+  const criticalAlerts = alerts.filter(a => a.severity === "critical" && !a.acknowledged).length;
+  const complianceScore = stats?.complianceScore ?? null;
+  const recentFindings = vulnerabilities.length > 0
+    ? vulnerabilities.slice(0, 5).map(v => ({ id: `vuln-${v.id}`, type: "Vulnerability", event: v.cveId, severity: v.severity, source: v.container, description: `${v.package} ${v.version || ""}`.trim() }))
+    : alerts.slice(0, 5).map(a => ({ id: `alert-${a.id}`, type: "Alert", event: a.title, severity: a.severity, source: a.source || "runtime-monitor", description: a.description }));
+
+  const summaryText = ls ? "Generating security posture summary…" : `The platform is currently monitoring ${stats?.totalContainers ?? containers.length ?? 0} containers with ${vulnerabilities.length} known vulnerabilities, ${criticalAlerts} critical alerts, and a compliance score of ${complianceScore != null ? `${complianceScore}%` : "unknown"}. ${criticalAlerts > 0 ? "Immediate attention is recommended for active critical issues." : "No active critical alerts are currently blocking operations."}`;
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Reports</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={onExport} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
+            <Download size={12} strokeWidth={1.5} /> EXPORT PDF
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
+        <StatCard label="Containers Monitored" value={ls ? "…" : stats?.totalContainers ?? containers.length} icon={Box} accent={C.cyan} />
+        <StatCard label="Total Vulnerabilities" value={lv ? "…" : vulnerabilities.length} icon={Search} accent={C.red} />
+        <StatCard label="Critical Alerts" value={la ? "…" : criticalAlerts} icon={Bell} accent={C.amber} />
+        <StatCard label="Compliance Score" value={lcomp && ls ? "…" : complianceScore != null ? `${complianceScore}%` : "—"} icon={CheckCircle} accent={C.green} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
+        <Panel title="Security Summary" icon={FileText}>
+          <div style={{ padding: "18px" }}>
+            <Label>Executive Snapshot</Label>
+            <div style={{ fontFamily: sans, fontSize: 13, color: C.text, lineHeight: 1.7, marginBottom: 16 }}>{summaryText}</div>
+          </div>
+        </Panel>
+        <Panel title="Report Status" icon={Shield}>
+          <div style={{ padding: "18px" }}>
+            <Label>Current Coverage</Label>
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><Mono size={10} color={C.textDim}>VULNERABILITIES</Mono><SeverityBadge severity={vulnerabilities.some(v => v.severity === "critical") ? "critical" : vulnerabilities.length > 0 ? "high" : "low"} /></div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><Mono size={10} color={C.textDim}>ALERT STATUS</Mono><SeverityBadge severity={criticalAlerts > 0 ? "critical" : alerts.length > 0 ? "medium" : "low"} /></div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><Mono size={10} color={C.textDim}>COMPLIANCE</Mono><SeverityBadge severity={complianceScore >= 85 ? "low" : complianceScore >= 60 ? "medium" : "high"} /></div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel title="Recent Findings" icon={AlertTriangle}>
+        {recentFindings.length === 0 ? <EmptyState icon={CheckCircle} message="NO RECENT FINDINGS" /> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={TH}>Type</th><th style={TH}>Event</th><th style={TH}>Severity</th><th style={TH}>Source</th><th style={TH}>Description</th></tr></thead>
+              <tbody>
+                {recentFindings.map(item => (
+                  <tr key={item.id} onMouseEnter={e => e.currentTarget.style.background = C.surface2} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <td style={TD}><Mono size={10} color={C.cyan}>{item.type.toUpperCase()}</Mono></td>
+                    <td style={TD}><Mono size={11} color={C.textBright}>{item.event}</Mono></td>
+                    <td style={TD}><SeverityBadge severity={item.severity} /></td>
+                    <td style={TD}><Mono size={10} color={C.textDim}>{item.source}</Mono></td>
+                    <td style={TD}><span style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{item.description}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PAGE: TEAM
+// ─────────────────────────────────────────────
+
+const TEAM_MEMBERS = [
+  { id: "admin",    name: "Security Admin",    roleBadge: "Admin",   status: "Active",    focus: "Threat response and platform hardening",        permissions: "Full policy control, alert triage, configuration changes" },
+  { id: "devops",   name: "DevOps Engineer",   roleBadge: "Viewer",  status: "Active",    focus: "Container uptime and deployment stability",      permissions: "Infrastructure visibility, runtime diagnostics, deployment coordination" },
+  { id: "analyst",  name: "Compliance Analyst",roleBadge: "Analyst", status: "Reviewing", focus: "Audit readiness and benchmark remediation",      permissions: "Compliance review, reporting access, evidence collection" },
+];
+
+const INCIDENT_OWNERSHIP = [
+  { event: "Critical vulnerabilities", role: "Security Admin",     severity: "critical" },
+  { event: "Container downtime",        role: "DevOps Engineer",    severity: "warning"  },
+  { event: "Compliance failures",       role: "Compliance Analyst", severity: "info"     },
+  { event: "Secrets exposure",          role: "Security Admin",     severity: "critical" },
+];
+
+function TeamPage({ onBack }) {
+  const roleBadgeStyle = {
+    Admin:   { bg: "rgba(251,113,133,0.15)", color: C.red,   border: `${C.red}55`   },
+    Analyst: { bg: "rgba(56,189,248,0.12)",  color: C.cyan,  border: `${C.cyan}55`  },
+    Viewer:  { bg: "rgba(52,211,153,0.12)",  color: C.green, border: `${C.green}55` },
+  };
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Team</div>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>{TEAM_MEMBERS.length} CORE MEMBERS</Mono>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
+        <Panel title="Team Directory" icon={Users}>
+          <div style={{ display: "grid", gap: 1, background: C.border }}>
+            {TEAM_MEMBERS.map(member => (
+              <div key={member.id} style={{ background: C.surface, padding: "16px 18px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontFamily: sans, fontSize: 14, fontWeight: 600, color: C.textBright }}>{member.name}</div>
+                    <Mono size={9} color={C.textDim}>{member.status.toUpperCase()}</Mono>
+                  </div>
+                  <span style={{ display: "inline-block", fontFamily: mono, fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 3, letterSpacing: "0.12em", background: roleBadgeStyle[member.roleBadge].bg, color: roleBadgeStyle[member.roleBadge].color, border: `1px solid ${roleBadgeStyle[member.roleBadge].border}` }}>
+                    {member.roleBadge.toUpperCase()}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div><Label>Focus</Label><div style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{member.focus}</div></div>
+                  <div><Label>Permissions</Label><div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5 }}>{member.permissions}</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="Access Control Summary" icon={Lock}>
+          <div style={{ padding: "18px" }}>
+            <Label>Role-Based Access</Label>
+            <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.6 }}>
+              Access is segmented by operational responsibility. Admin roles can change enforcement settings and respond to critical incidents, analysts can review findings and compliance posture, and viewer-oriented roles keep visibility into runtime health without broad security control changes.
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel title="Incident Ownership" icon={Shield}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={TH}>Incident Type</th><th style={TH}>Owning Role</th><th style={TH}>Priority</th></tr></thead>
+            <tbody>
+              {INCIDENT_OWNERSHIP.map(item => (
+                <tr key={item.event} onMouseEnter={e => e.currentTarget.style.background = C.surface2} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <td style={TD}><Mono size={11} color={C.textBright}>{item.event}</Mono></td>
+                  <td style={TD}><span style={{ fontFamily: sans, fontSize: 12, color: C.text }}>{item.role}</span></td>
+                  <td style={TD}><SeverityBadge severity={item.severity} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -1420,8 +1686,7 @@ function PlaceholderPage({ title, icon: Icon, onBack }) {
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [dark, setDark] = useState(true);
-
-  C = getTheme(dark);
+  applyTheme(dark);
 
   const socket = useSocket();
   const { containers, loading: lcont } = useContainers(socket);
@@ -1657,6 +1922,12 @@ export default function Dashboard() {
         return <SecretsPage onBack={() => setActiveNav("dashboard")} />;
       case "audit":
         return <AuditPage socket={socket} onBack={() => setActiveNav("dashboard")} />;
+      case "config":
+        return <ConfigPage onBack={() => setActiveNav("dashboard")} />;
+      case "team":
+        return <TeamPage onBack={() => setActiveNav("dashboard")} />;
+      case "reports":
+        return <ReportsPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} compliance={compliance} stats={stats} scans={scans} ls={ls} lv={lv} la={la} lcomp={lcomp} lsc={lsc} onBack={() => setActiveNav("dashboard")} onExport={handleExport} />;
       default:
         const p = PAGE_TITLES[activeNav];
         return p ? <PlaceholderPage title={p.title} icon={p.Icon} onBack={() => setActiveNav("dashboard")} /> : null;
