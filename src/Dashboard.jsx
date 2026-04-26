@@ -4,7 +4,8 @@ import {
   Search, Bell, Download, Play, Settings, Users, FileText,
   Lock, BarChart2, Box, Clock, Cpu, Database,
   XCircle, AlertCircle, Info, Layers, Terminal,
-  List, ChevronLeft, Wifi, WifiOff, Network, Sun, Moon
+  List, ChevronLeft, Wifi, WifiOff, Network, Sun, Moon,
+  ChevronDown, ClipboardList, User
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -483,10 +484,163 @@ function VulnTable({ rows }) {
 }
 
 // ─────────────────────────────────────────────
+// ROLES
+// ─────────────────────────────────────────────
+
+const ROLES = {
+  admin: {
+    id: 'admin',
+    label: 'Security Admin',
+    color: '#fb7185',
+    description: 'Full access — threat response, platform control, configuration',
+    nav: ['dashboard', 'monitor', 'vulns', 'alerts', 'secrets', 'compliance', 'reports', 'audit', 'config', 'team', 'tasks'],
+    tasks: [
+      { id: 1, label: 'Review all active critical alerts in the Alerts page',          done: false, priority: 'critical', nav: 'alerts'     },
+      { id: 2, label: 'Run vulnerability scan and triage critical CVEs',               done: false, priority: 'critical', nav: 'vulns'      },
+      { id: 3, label: 'Run secrets scan on all container images',                      done: false, priority: 'high',     nav: 'secrets'    },
+      { id: 4, label: 'Check CIS Docker Benchmark compliance score',                  done: false, priority: 'high',     nav: 'compliance' },
+      { id: 5, label: 'Review network intrusion threats from agent-3',                done: false, priority: 'high',     nav: 'dashboard'  },
+      { id: 6, label: 'Verify all 3 monitoring agents are online in Live Monitor',    done: false, priority: 'medium',   nav: 'monitor'    },
+      { id: 7, label: 'Review audit log for any unauthorized actions',               done: false, priority: 'medium',   nav: 'audit'      },
+      { id: 8, label: 'Update CPU/memory alert thresholds in Config if needed',      done: false, priority: 'low',      nav: 'config'     },
+      { id: 9, label: 'Export security report PDF for stakeholders',                 done: false, priority: 'low',      nav: 'reports'    },
+    ],
+  },
+  analyst: {
+    id: 'analyst',
+    label: 'Compliance Analyst',
+    color: '#38bdf8',
+    description: 'Compliance review, audit access, reporting — read-only on runtime',
+    nav: ['dashboard', 'vulns', 'compliance', 'reports', 'audit', 'team', 'tasks'],
+    tasks: [
+      { id: 1, label: 'Open Compliance page and review CIS benchmark findings',      done: false, priority: 'critical', nav: 'compliance' },
+      { id: 2, label: 'Identify and document all FAIL checks in CIS categories',     done: false, priority: 'high',     nav: 'compliance' },
+      { id: 3, label: 'Check vulnerability scanner for new critical CVEs',           done: false, priority: 'high',     nav: 'vulns'      },
+      { id: 4, label: 'Filter vulnerabilities by Critical and High severity',        done: false, priority: 'high',     nav: 'vulns'      },
+      { id: 5, label: 'Review audit log for compliance scan history',               done: false, priority: 'medium',   nav: 'audit'      },
+      { id: 6, label: 'Check Reports page for overall security posture summary',    done: false, priority: 'medium',   nav: 'reports'    },
+      { id: 7, label: 'Export PDF report for compliance evidence collection',       done: false, priority: 'medium',   nav: 'reports'    },
+      { id: 8, label: 'Review team roles and incident ownership assignments',       done: false, priority: 'low',      nav: 'team'       },
+    ],
+  },
+  devops: {
+    id: 'devops',
+    label: 'DevOps Engineer',
+    color: '#34d399',
+    description: 'Container uptime, runtime diagnostics, deployment stability',
+    nav: ['dashboard', 'monitor', 'alerts', 'team', 'tasks'],
+    tasks: [
+      { id: 1, label: 'Open Live Monitor and verify all containers are healthy',     done: false, priority: 'critical', nav: 'monitor'    },
+      { id: 2, label: 'Check all 3 monitoring agents are ONLINE in agents panel',   done: false, priority: 'critical', nav: 'monitor'    },
+      { id: 3, label: 'Restart any containers showing CRIT health status',          done: false, priority: 'critical', nav: 'monitor'    },
+      { id: 4, label: 'Review active alerts for CPU and memory threshold alerts',   done: false, priority: 'high',     nav: 'alerts'     },
+      { id: 5, label: 'Dismiss resolved alerts and clear false positives',          done: false, priority: 'high',     nav: 'alerts'     },
+      { id: 6, label: 'Check dashboard for network threats from intrusion agent',   done: false, priority: 'medium',   nav: 'dashboard'  },
+      { id: 7, label: 'Confirm demo containers are running via Live Monitor',       done: false, priority: 'low',      nav: 'monitor'    },
+    ],
+  },
+};
+
+// ─────────────────────────────────────────────
+// LOGIN SCREEN
+// ─────────────────────────────────────────────
+
+function LoginScreen({ onLogin }) {
+  const [hovering, setHovering] = useState(null);
+  const [loginDark, setLoginDark] = useState(true);
+  const bg = loginDark ? DARK : LIGHT;
+
+  return (
+    <div style={{ minHeight: "100vh", background: bg.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: sans, padding: 24, position: "relative", overflow: "hidden" }}>
+      <style>{`
+        @keyframes float-1 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-18px) rotate(3deg)} }
+        @keyframes float-2 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-12px) rotate(-2deg)} }
+        @keyframes float-3 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-22px)} }
+        @keyframes pulse-glow { 0%,100%{box-shadow:0 0 20px ${DARK.cyan}33} 50%{box-shadow:0 0 40px ${DARK.cyan}66} }
+        @keyframes shimmer { 0%{opacity:0.03} 50%{opacity:0.07} 100%{opacity:0.03} }
+      `}</style>
+
+      {/* Animated background blobs */}
+      <div style={{ position: "absolute", width: 400, height: 400, borderRadius: "50%", background: `radial-gradient(circle, ${DARK.cyan}08, transparent 70%)`, top: -100, left: -100, animation: "float-1 8s ease-in-out infinite" }} />
+      <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", background: `radial-gradient(circle, #7c3aed08, transparent 70%)`, bottom: -80, right: -60, animation: "float-2 10s ease-in-out infinite" }} />
+      <div style={{ position: "absolute", width: 200, height: 200, borderRadius: "50%", background: `radial-gradient(circle, ${DARK.green}06, transparent 70%)`, top: "40%", right: "10%", animation: "float-3 7s ease-in-out infinite" }} />
+
+      {/* Theme toggle */}
+      <button onClick={() => setLoginDark(d => !d)}
+        style={{ position: "absolute", top: 24, right: 24, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${bg.border2}`, borderRadius: 8, cursor: "pointer", background: "transparent", zIndex: 10 }}>
+        {loginDark ? <Sun size={15} color={DARK.amber} strokeWidth={1.5} /> : <Moon size={15} color={LIGHT.cyan} strokeWidth={1.5} />}
+      </button>
+
+      {/* Header */}
+      <div style={{ marginBottom: 48, textAlign: "center", position: "relative", zIndex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 20 }}>
+          <div style={{ width: 56, height: 56, background: `${DARK.cyan}15`, border: `1.5px solid ${DARK.cyan}55`, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", animation: "pulse-glow 3s ease-in-out infinite" }}>
+            <Shield size={28} color={DARK.cyan} strokeWidth={1.5} />
+          </div>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontSize: 30, fontWeight: 700, color: bg.textBright, letterSpacing: "-0.02em" }}>ContainerShield</div>
+            <div style={{ fontFamily: mono, fontSize: 10, color: bg.textDim, letterSpacing: "0.18em" }}>DISTRIBUTED SECURITY PLATFORM</div>
+          </div>
+        </div>
+        <div style={{ fontFamily: sans, fontSize: 15, color: bg.textDim, fontWeight: 400 }}>Select your role to access your personalized dashboard</div>
+      </div>
+
+      {/* Role cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18, maxWidth: 800, width: "100%", position: "relative", zIndex: 1 }}>
+        {Object.values(ROLES).map(role => (
+          <div key={role.id}
+            onClick={() => onLogin(role.id)}
+            onMouseEnter={() => setHovering(role.id)}
+            onMouseLeave={() => setHovering(null)}
+            style={{ background: hovering === role.id ? `${bg.surface2}` : bg.surface, border: `1.5px solid ${hovering === role.id ? role.color + 'aa' : bg.border}`, borderRadius: 14, padding: "28px 24px", cursor: "pointer", transition: "all 0.18s", position: "relative", overflow: "hidden", transform: hovering === role.id ? "translateY(-4px)" : "translateY(0)", boxShadow: hovering === role.id ? `0 12px 32px ${role.color}22` : "none" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${role.color}, ${role.color}44)`, opacity: hovering === role.id ? 1 : 0.5, transition: "opacity 0.18s" }} />
+            <div style={{ position: "absolute", bottom: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: `${role.color}08`, animation: "shimmer 3s ease-in-out infinite" }} />
+
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 10, background: `${role.color}18`, border: `1.5px solid ${role.color}55`, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.18s", boxShadow: hovering === role.id ? `0 0 16px ${role.color}44` : "none" }}>
+                <User size={18} color={role.color} strokeWidth={1.5} />
+              </div>
+              <div>
+                <div style={{ fontFamily: sans, fontSize: 15, fontWeight: 700, color: bg.textBright }}>{role.label}</div>
+                <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: `${role.color}18`, color: role.color, border: `1px solid ${role.color}44`, letterSpacing: "0.1em" }}>
+                  {role.id.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ fontFamily: sans, fontSize: 12, color: bg.textDim, lineHeight: 1.7, marginBottom: 18 }}>{role.description}</div>
+
+            <div style={{ borderTop: `1px solid ${bg.border}`, paddingTop: 14 }}>
+              <div style={{ fontFamily: mono, fontSize: 8, color: bg.textDim, letterSpacing: "0.12em", marginBottom: 8 }}>PAGE ACCESS</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {role.nav.filter(n => n !== 'tasks').map(n => (
+                  <span key={n} style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: bg.surface2, color: bg.textDim, border: `1px solid ${bg.border}` }}>
+                    {n.toUpperCase()}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px", borderRadius: 6, background: `${role.color}${hovering === role.id ? '22' : '10'}`, transition: "all 0.18s" }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: role.color, fontWeight: 700, letterSpacing: "0.08em" }}>ENTER AS {role.id.toUpperCase()}</span>
+              <ChevronDown size={11} color={role.color} style={{ transform: "rotate(-90deg)" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 40, fontFamily: mono, fontSize: 9, color: bg.textDim, letterSpacing: "0.12em", position: "relative", zIndex: 1 }}>
+        CONTAINERSHIELD · ROLE-BASED ACCESS CONTROL DEMO
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // SIDEBAR
 // ─────────────────────────────────────────────
 
-const NAV = [
+const NAV_ALL = [
   { section: "Monitor", items: [
     { key: "dashboard",  label: "Dashboard",    Icon: Layers },
     { key: "monitor",    label: "Live Monitor", Icon: Activity },
@@ -502,12 +656,19 @@ const NAV = [
     { key: "audit",      label: "Audit Log",    Icon: List },
   ]},
   { section: "System", items: [
+    { key: "tasks",      label: "My Tasks",     Icon: ClipboardList },
     { key: "config",     label: "Config",       Icon: Settings },
     { key: "team",       label: "Team",         Icon: Users },
   ]},
 ];
 
-function Sidebar({ active, onNav }) {
+function Sidebar({ active, onNav, role }) {
+  const allowedNav = ROLES[role]?.nav || [];
+  const nav = NAV_ALL.map(section => ({
+    ...section,
+    items: section.items.filter(item => allowedNav.includes(item.key)),
+  })).filter(section => section.items.length > 0);
+
   return (
     <aside style={{ width: 224, minHeight: "100vh", background: C.surface, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", position: "sticky", top: 0, height: "100vh", flexShrink: 0 }}>
       <div style={{ padding: "22px 20px 18px", borderBottom: `1px solid ${C.border}` }}>
@@ -523,7 +684,7 @@ function Sidebar({ active, onNav }) {
       </div>
 
       <nav style={{ flex: 1, padding: "10px 0", overflowY: "auto" }}>
-        {NAV.map(({ section, items }) => (
+        {nav.map(({ section, items }) => (
           <div key={section} style={{ marginBottom: 4 }}>
             <div style={{ fontFamily: mono, fontSize: 8, letterSpacing: "0.22em", textTransform: "uppercase", color: C.textDim, padding: "10px 20px 5px" }}>{section}</div>
             {items.map(({ key, label, Icon }) => {
@@ -558,8 +719,10 @@ function Sidebar({ active, onNav }) {
 const ALERT_ICON_MAP = { critical: XCircle, warning: AlertCircle, info: Info };
 const ALERT_COLOR_MAP = { critical: C.red, warning: C.amber, info: C.cyan };
 
-function Topbar({ clusterName, containerCount, alertCount, alerts, connected, dark, onToggleDark, onScan, onExport, onAcknowledge, onAcknowledgeAll }) {
+function Topbar({ clusterName, containerCount, alertCount, alerts, connected, dark, onToggleDark, onScan, onExport, onAcknowledge, onAcknowledgeAll, role, onRoleChange }) {
   const [open, setOpen] = useState(false);
+  const [roleOpen, setRoleOpen] = useState(false);
+  const currentRole = ROLES[role];
   const date = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 
   return (
@@ -581,6 +744,38 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* Role badge + dropdown */}
+        <div style={{ position: "relative" }}>
+          <button onClick={() => setRoleOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", border: `1px solid ${currentRole.color}55`, background: `${currentRole.color}12`, borderRadius: 5, cursor: "pointer", fontFamily: mono, fontSize: 10, color: currentRole.color, fontWeight: 700, letterSpacing: "0.05em", transition: "all 0.12s" }}>
+            <User size={12} strokeWidth={2} />
+            {currentRole.label.toUpperCase()}
+            <ChevronDown size={11} strokeWidth={2} style={{ transition: "transform 0.15s", transform: roleOpen ? "rotate(180deg)" : "rotate(0deg)" }} />
+          </button>
+
+          {roleOpen && (
+            <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 260, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 8px 32px rgba(0,0,0,0.4)", zIndex: 100, overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}` }}>
+                <Mono size={9} color={C.textDim}>SWITCH PERSPECTIVE</Mono>
+              </div>
+              {Object.values(ROLES).map(r => (
+                <div key={r.id} onClick={() => { onRoleChange(r.id); setRoleOpen(false); }}
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", cursor: "pointer", background: r.id === role ? `${r.color}10` : "transparent", borderLeft: `2px solid ${r.id === role ? r.color : "transparent"}`, transition: "all 0.1s" }}
+                  onMouseEnter={e => { if (r.id !== role) e.currentTarget.style.background = C.surface2; }}
+                  onMouseLeave={e => { if (r.id !== role) e.currentTarget.style.background = "transparent"; }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: `${r.color}18`, border: `1px solid ${r.color}44`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <User size={13} color={r.color} strokeWidth={1.5} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright }}>{r.label}</div>
+                    <Mono size={9} color={C.textDim}>{r.id === role ? "CURRENT" : r.nav.length + " PAGES"}</Mono>
+                  </div>
+                  {r.id === role && <CheckCircle size={12} color={r.color} strokeWidth={2} />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Dark/Light mode toggle */}
         <button onClick={onToggleDark} title={dark ? "Switch to light mode" : "Switch to dark mode"} style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border2}`, borderRadius: 5, cursor: "pointer", background: "transparent", transition: "all 0.12s" }}
           onMouseEnter={e => e.currentTarget.style.background = `${C.cyan}15`}
@@ -650,6 +845,7 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
         </div>
       </div>
       {open && <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />}
+      {roleOpen && <div onClick={() => setRoleOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />}
     </div>
   );
 }
@@ -1175,18 +1371,7 @@ function SecretsPage({ onBack }) {
         </button>
       </div>
 
-      {!scanned ? (
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 16 }}>
-          <Lock size={32} color={C.border2} strokeWidth={1} />
-          <div style={{ fontFamily: sans, fontSize: 14, color: C.textDim, textAlign: "center" }}>
-            Scan your container images for hardcoded secrets
-          </div>
-          <Mono size={9} color={C.textDim}>API KEYS · PASSWORDS · PRIVATE KEYS · TOKENS</Mono>
-          <button onClick={scan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em", marginTop: 8 }}>
-            <Play size={12} strokeWidth={2} /> RUN SECRETS SCAN
-          </button>
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 340, gap: 20, overflow: "hidden", position: "relative" }}>
           {/* Animated scan line */}
           <style>{`
@@ -1244,6 +1429,17 @@ function SecretsPage({ onBack }) {
             </div>
             <Mono size={9} color={C.textDim} style={{ marginTop: 10 }}>CHECKING FOR API KEYS · PASSWORDS · TOKENS · PRIVATE KEYS</Mono>
           </div>
+        </div>
+      ) : !scanned ? (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 16 }}>
+          <Lock size={32} color={C.border2} strokeWidth={1} />
+          <div style={{ fontFamily: sans, fontSize: 14, color: C.textDim, textAlign: "center" }}>
+            Scan your container images for hardcoded secrets
+          </div>
+          <Mono size={9} color={C.textDim}>API KEYS · PASSWORDS · PRIVATE KEYS · TOKENS</Mono>
+          <button onClick={scan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em", marginTop: 8 }}>
+            <Play size={12} strokeWidth={2} /> RUN SECRETS SCAN
+          </button>
         </div>
       ) : (
         <>
@@ -1659,6 +1855,162 @@ function TeamPage({ onBack }) {
 }
 
 // ─────────────────────────────────────────────
+// PAGE: MY TASKS
+// ─────────────────────────────────────────────
+
+function TasksPage({ role, onBack, onNav }) {
+  const roleData = ROLES[role];
+  const [tasks, setTasks] = useState(roleData.tasks.map(t => ({ ...t })));
+
+  const toggle = (id) => setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  const reset = () => setTasks(roleData.tasks.map(t => ({ ...t, done: false })));
+
+  const done = tasks.filter(t => t.done).length;
+  const pct = Math.round((done / tasks.length) * 100);
+  const color = pct === 100 ? C.green : pct >= 50 ? C.amber : C.cyan;
+
+  const priorityColor = { critical: C.red, high: C.amber, medium: C.cyan, low: C.textDim };
+
+  // Role-specific quick actions
+  const quickActions = {
+    admin: [
+      { label: "View Active Alerts", nav: "alerts" },
+      { label: "Run Vuln Scan",      nav: "vulns"   },
+      { label: "Check Compliance",   nav: "compliance" },
+      { label: "Review Audit Log",   nav: "audit"   },
+    ],
+    analyst: [
+      { label: "Open Compliance",    nav: "compliance" },
+      { label: "View Vulnerabilities", nav: "vulns"  },
+      { label: "Export Report",      nav: "reports" },
+      { label: "Audit Log",          nav: "audit"   },
+    ],
+    devops: [
+      { label: "Live Monitor",       nav: "monitor" },
+      { label: "View Alerts",        nav: "alerts"  },
+      { label: "Dashboard",          nav: "dashboard" },
+    ],
+  }[role] || [];
+
+  return (
+    <div style={{ padding: "24px 28px", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border2}`, color: C.text, borderRadius: 5, padding: "6px 12px", fontFamily: mono, fontSize: 10, cursor: "pointer" }}>
+          <ChevronLeft size={12} /> BACK
+        </button>
+        <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>My Tasks</div>
+        <span style={{ fontFamily: mono, fontSize: 9, padding: "3px 8px", borderRadius: 3, background: `${roleData.color}18`, color: roleData.color, border: `1px solid ${roleData.color}44` }}>
+          {roleData.label.toUpperCase()}
+        </span>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>{done}/{tasks.length} COMPLETE</Mono>
+        <button onClick={reset} style={{ fontFamily: mono, fontSize: 9, padding: "4px 10px", borderRadius: 4, cursor: "pointer", background: "transparent", color: C.textDim, border: `1px solid ${C.border}` }}>RESET</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Progress */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "20px 24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+              <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: C.textBright }}>Progress</div>
+              <Mono size={14} color={color}>{pct}%</Mono>
+            </div>
+            <div style={{ height: 8, background: C.surface2, borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 4, transition: "width 0.5s ease" }} />
+            </div>
+            <Mono size={9} color={C.textDim}>{done} OF {tasks.length} TASKS COMPLETED</Mono>
+          </div>
+
+          {/* Task list */}
+          <Panel title="Task List" icon={ClipboardList}>
+            {tasks.map(task => (
+              <div key={task.id}
+                style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, transition: "background 0.1s", opacity: task.done ? 0.55 : 1 }}
+                onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                {/* Checkbox */}
+                <div onClick={() => toggle(task.id)} style={{ width: 18, height: 18, borderRadius: 4, border: `2px solid ${task.done ? C.green : C.border2}`, background: task.done ? `${C.green}22` : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.15s", cursor: "pointer" }}>
+                  {task.done && <CheckCircle size={11} color={C.green} strokeWidth={2.5} />}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: sans, fontSize: 13, color: task.done ? C.textDim : C.textBright, textDecoration: task.done ? "line-through" : "none" }}>
+                    {task.label}
+                  </div>
+                </div>
+                <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: `${priorityColor[task.priority]}18`, color: priorityColor[task.priority], border: `1px solid ${priorityColor[task.priority]}44`, letterSpacing: "0.08em", flexShrink: 0 }}>
+                  {task.priority.toUpperCase()}
+                </span>
+                {task.nav && (
+                  <button onClick={() => onNav(task.nav)} style={{ fontFamily: mono, fontSize: 8, padding: "3px 8px", borderRadius: 3, cursor: "pointer", background: `${C.cyan}10`, color: C.cyan, border: `1px solid ${C.cyan}44`, flexShrink: 0, letterSpacing: "0.06em" }}>
+                    GO →
+                  </button>
+                )}
+              </div>
+            ))}
+          </Panel>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Role info */}
+          <Panel title="Your Role" icon={User}>
+            <div style={{ padding: "18px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: `${roleData.color}18`, border: `1px solid ${roleData.color}44`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <User size={18} color={roleData.color} strokeWidth={1.5} />
+                </div>
+                <div>
+                  <div style={{ fontFamily: sans, fontSize: 14, fontWeight: 700, color: C.textBright }}>{roleData.label}</div>
+                  <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 6px", borderRadius: 3, background: `${roleData.color}18`, color: roleData.color, border: `1px solid ${roleData.color}44` }}>
+                    {role.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.6 }}>{roleData.description}</div>
+            </div>
+          </Panel>
+
+          {/* Quick actions */}
+          <Panel title="Quick Access" icon={Activity}>
+            <div style={{ padding: "14px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {quickActions.map(action => (
+                  <button key={action.nav} onClick={() => onNav(action.nav)}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, cursor: "pointer", fontFamily: sans, fontSize: 12, color: C.textBright, fontWeight: 600, transition: "all 0.1s", textAlign: "left" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.cyan; e.currentTarget.style.color = C.cyan; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textBright; }}>
+                    {action.label}
+                    <ChevronDown size={12} style={{ transform: "rotate(-90deg)" }} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+
+          {/* Task breakdown */}
+          <Panel title="By Priority" icon={AlertTriangle}>
+            <div style={{ padding: "16px 18px" }}>
+              {['critical', 'high', 'medium', 'low'].map(p => {
+                const total = tasks.filter(t => t.priority === p).length;
+                const done2 = tasks.filter(t => t.priority === p && t.done).length;
+                if (total === 0) return null;
+                return (
+                  <div key={p} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <span style={{ fontFamily: mono, fontSize: 9, width: 60, color: priorityColor[p], letterSpacing: "0.08em" }}>{p.toUpperCase()}</span>
+                    <div style={{ flex: 1, height: 5, background: C.surface2, borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${total > 0 ? (done2 / total) * 100 : 0}%`, background: priorityColor[p], borderRadius: 3, transition: "width 0.4s" }} />
+                    </div>
+                    <Mono size={9} color={C.textDim}>{done2}/{total}</Mono>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
 // ─────────────────────────────────────────────
 
@@ -1686,6 +2038,7 @@ function PlaceholderPage({ title, icon: Icon, onBack }) {
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [dark, setDark] = useState(true);
+  const [role, setRole] = useState(null);
   applyTheme(dark);
 
   const socket = useSocket();
@@ -1697,6 +2050,11 @@ export default function Dashboard() {
   const { compliance, loading: lcomp } = useCompliance();
   const { stats, loading: ls }         = useStats();
   const { scans, loading: lsc }        = useScanHistory();
+
+  const handleRoleChange = (newRole) => {
+    setRole(newRole);
+    if (!ROLES[newRole].nav.includes(activeNav)) setActiveNav("dashboard");
+  };
 
   // ── Export report ──────────────────────────
   const handleExport = async () => {
@@ -1922,10 +2280,12 @@ export default function Dashboard() {
         return <SecretsPage onBack={() => setActiveNav("dashboard")} />;
       case "audit":
         return <AuditPage socket={socket} onBack={() => setActiveNav("dashboard")} />;
-      case "config":
-        return <ConfigPage onBack={() => setActiveNav("dashboard")} />;
+      case "tasks":
+        return <TasksPage role={role} onBack={() => setActiveNav("dashboard")} onNav={setActiveNav} />;
       case "team":
         return <TeamPage onBack={() => setActiveNav("dashboard")} />;
+      case "config":
+        return <ConfigPage onBack={() => setActiveNav("dashboard")} />;
       case "reports":
         return <ReportsPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} compliance={compliance} stats={stats} scans={scans} ls={ls} lv={lv} la={la} lcomp={lcomp} lsc={lsc} onBack={() => setActiveNav("dashboard")} onExport={handleExport} />;
       default:
@@ -1934,9 +2294,11 @@ export default function Dashboard() {
     }
   }
 
+  if (!role) return <LoginScreen onLogin={setRole} />;
+
   return (
     <div style={{ display: "flex", background: C.bg, color: C.text, minHeight: "100vh", fontFamily: sans }}>
-      <Sidebar active={activeNav} onNav={setActiveNav} />
+      <Sidebar active={activeNav} onNav={setActiveNav} role={role} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar
           clusterName={agents.length > 0 ? `${agents.filter(a => a.status === 'online').length}/${agents.length} agents online` : null}
@@ -1948,6 +2310,8 @@ export default function Dashboard() {
           onToggleDark={() => setDark(d => !d)}
           onScan={() => setActiveNav("vulns")}
           onExport={handleExport}
+          role={role}
+          onRoleChange={handleRoleChange}
           onAcknowledge={acknowledge}
           onAcknowledgeAll={acknowledgeAll}
         />
