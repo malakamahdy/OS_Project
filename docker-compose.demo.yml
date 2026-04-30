@@ -1,7 +1,5 @@
-version: '3.8'
-
 # ─────────────────────────────────────────────
-# ContainerShield — Demo Containers
+# Citadel — Demo Containers
 # These are the containers being monitored.
 # Run: docker-compose -f docker-compose.demo.yml up -d
 # ─────────────────────────────────────────────
@@ -43,4 +41,14 @@ services:
     image: alpine:3.19
     container_name: cs-alpine-logger
     command: sh -c "while true; do echo 'log entry'; sleep 5; done"
+    restart: unless-stopped
+
+  # ── Secrets demo container ──
+  # Built from a custom Dockerfile with fake credentials baked in.
+  # Run secrets scan on the dashboard to see Trivy detect them.
+  secrets-demo:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile.secrets-demo
+    container_name: cs-secrets-demo
     restart: unless-stopped

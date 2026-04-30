@@ -1,72 +1,36 @@
-const Docker = require('dockerode'); // we want to kepe docker as constant because we dont want to overwrite the tool that talks to docker
-const axios = require('axios');  // same with axios, which is in charge of POST to the Backend
-const os = require('os'); 
+const Docker = require('dockerode');
+const axios = require('axios');
+const os = require('os');
 
 // ─────────────────────────────────────────────
 // AGENT CONFIG
-// These are set via environment variables in
-// docker-compose.yml so each agent is unique.
 // ─────────────────────────────────────────────
 
+const AGENT_ID        = process.env.AGENT_ID || `agent-${os.hostname()}`;
+const AGENT_LABEL     = process.env.AGENT_LABEL || os.hostname();
+const BACKEND_URL     = process.env.BACKEND_URL || 'http://localhost:3002';
+const REPORT_INTERVAL = parseInt(process.env.REPORT_INTERVAL || '10000');
+const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || null;
 
-
-// the reason here why we want give the agents that second option is becasue if it where the case that a user runs agent.js 
-// and they dont have the docker-compose, then we would set the default variables right here. is a safe measure. 
-
-
-const AGENT_ID      = process.env.AGENT_ID || `agent-${os.hostname()}`;  //
-const AGENT_LABEL   = process.env.AGENT_LABEL || os.hostname();
-const BACKEND_URL   = process.env.BACKEND_URL || 'http://localhost:3002';
-const REPORT_INTERVAL = parseInt(process.env.REPORT_INTERVAL || '10000'); // 
-
-const docker = new Docker({                 // stablishing that connection between the agents.js and the docker engine
+const docker = new Docker({
   socketPath: process.env.DOCKER_SOCKET ||
-    (process.platform === 'darwin'                    // here we are checking depending on what kind of linux is the user running this, they are different paths for differens OS's
+    (process.platform === 'darwin'
       ? `${process.env.HOME}/.docker/run/docker.sock`
       : '/var/run/docker.sock')
 });
 
 console.log(`[Agent] Starting: ${AGENT_ID} (${AGENT_LABEL})`);
 console.log(`[Agent] Reporting to: ${BACKEND_URL}`);
-console.log(`[Agent] Interval: ${REPORT_INTERVAL}ms`);            // here we are describing to the user what is happening, which is: 
-
-
-
-// starting agent - 1 (host primary) 
-
-// reporting to : https:// backend: 3002
-
-// interval : 10000ms -> 10 seconds 
+console.log(`[Agent] Interval: ${REPORT_INTERVAL}ms`);
+console.log(`[Agent] LLM Analysis: ${OPENAI_API_KEY ? 'ENABLED' : 'DISABLED (no API key)'}`);
 
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
 
-// this part is checking if each container is runnin well or not 
-
-
-
 function getHealth(container) {
   const state = container.State;
-  
-  
-// possibles values for state are:  
-
-// running, exited, dead, paused, restarting 
-
-
-
   const status = container.Status || '';
-
-// posible values for status are: 
-
-
-// up 2 hours (unhealthy) 
-// up 3 minutes (healthy)
-//exited (1) 5 minutes ago 
-
-
-
   if (state === 'running') {
     if (status.includes('unhealthy')) return 'crit';
     if (status.includes('health: starting')) return 'warn';
@@ -82,70 +46,118 @@ function parseImage(imageString) {
   return { image: parts[0] || 'unknown', tag: parts[1] || 'latest' };
 }
 
+// ─────────────────────────────────────────────
+// CONTAINER ISSUE HISTORY
+// Tracks repeated issues per container so the
+// LLM has context about patterns over time.
+// ─────────────────────────────────────────────
 
+const issueHistory = new Map();
+// containerName → [{ ts, type, value }, ...]
 
-// will give us a detail sumarry of the agents are running and if they are healthy: 
+function recordIssue(name, type, value) {
+  if (!issueHistory.has(name)) issueHistory.set(name, []);
+  const hist = issueHistory.get(name);
+  hist.push({ ts: Date.now(), type, value });
+  // Keep last 10 issues per container
+  if (hist.length > 10) hist.shift();
+}
 
-// depending on the status of each container we will get diffferent asnwers: 
+function getIssueCount(name, type, windowMs = 300000) {
+  const hist = issueHistory.get(name) || [];
+  const cutoff = Date.now() - windowMs;
+  return hist.filter(e => e.type === type && e.ts > cutoff).length;
+}
 
-// crit -> something is wrong 
+// ─────────────────────────────────────────────
+// LLM ANALYSIS
+// Calls OpenAI to analyze container anomalies
+// and generate remediation recommendations.
+// Only triggered when a container has issues.
+// ─────────────────────────────────────────────
 
+const analysisCache = new Map();
+// containerName → { ts, analysis } — cache for 5 min
 
-// warn -> something could potentially go wronh 
+async function analyzeWithLLM(containerName, issues) {
+  if (!OPENAI_API_KEY) return null;
 
+  // Don't re-analyze the same container within 5 minutes
+  const cached = analysisCache.get(containerName);
+  if (cached && Date.now() - cached.ts < 300000) return cached.analysis;
 
-// ok -> everything is runnning fine 
+  try {
+    const issueText = issues.map(i => `- ${i}`).join('\n');
+    const prompt = `You are a DevOps security expert analyzing a containerized application.
 
+Container: ${containerName}
+Agent: ${AGENT_LABEL}
+Issues detected:
+${issueText}
 
+Provide a concise remediation recommendation (2-3 sentences max). Be specific and actionable. Focus on what to do RIGHT NOW and what the likely root cause is. Do not repeat the issue description.`;
 
+    const response = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 150,
+        temperature: 0.3,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      }
+    );
 
-
-
-
+    const analysis = response.data.choices[0]?.message?.content?.trim();
+    if (analysis) {
+      analysisCache.set(containerName, { ts: Date.now(), analysis });
+      console.log(`[Agent] LLM analysis for ${containerName}: ${analysis.slice(0, 80)}...`);
+    }
+    return analysis || null;
+  } catch (err) {
+    console.error(`[Agent] LLM analysis failed for ${containerName}:`, err.message);
+    return null;
+  }
+}
 
 // ─────────────────────────────────────────────
 // COLLECT METRICS
-// Gathers container stats from Docker API
 // ─────────────────────────────────────────────
 
 async function collectMetrics() {
   const rawContainers = await docker.listContainers({ all: true });
   const containers = [];
 
-  // Run stats collection concurrently — this is the distributed part:
-  // each agent collects its own host's metrics in parallel
   await Promise.all(rawContainers.map(async (c) => {
     const { image, tag } = parseImage(c.Image);
-    let cpuPct = null;
-    let memPct = null;
-    let memUsageMb = null;
-    let memLimitMb = null;
-    let networkRx = null;
-    let networkTx = null;
+    let cpuPct = null, memPct = null, memUsageMb = null, memLimitMb = null;
+    let networkRx = null, networkTx = null;
 
-    if (c.State === 'running') {  // if the container are running we will get a summary of the CPU, Memory, Network I/O
+    if (c.State === 'running') {
       try {
         const container = docker.getContainer(c.Id);
         const stats = await container.stats({ stream: false });
 
-        // CPU
         const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - stats.precpu_stats.cpu_usage.total_usage;
         const systemDelta = stats.cpu_stats.system_cpu_usage - stats.precpu_stats.system_cpu_usage;
         const numCpus = stats.cpu_stats.online_cpus || 1;
         cpuPct = parseFloat(((cpuDelta / systemDelta) * numCpus * 100).toFixed(1));
 
-        // Memory
         const memUsage = stats.memory_stats.usage || 0;
         const memLimit = stats.memory_stats.limit || 1;
         memPct = parseFloat(((memUsage / memLimit) * 100).toFixed(1));
         memUsageMb = parseFloat((memUsage / 1024 / 1024).toFixed(1));
         memLimitMb = parseFloat((memLimit / 1024 / 1024).toFixed(1));
 
-        // Network I/O
         const networks = stats.networks || {};
         networkRx = Object.values(networks).reduce((s, n) => s + (n.rx_bytes || 0), 0);
         networkTx = Object.values(networks).reduce((s, n) => s + (n.tx_bytes || 0), 0);
-
       } catch { /* stats unavailable */ }
     }
 
@@ -155,12 +167,8 @@ async function collectMetrics() {
       image, tag,
       status: c.State,
       health: getHealth(c),
-      cpuPct,
-      memPct,
-      memUsageMb,
-      memLimitMb,
-      networkRx,
-      networkTx,
+      cpuPct, memPct, memUsageMb, memLimitMb,
+      networkRx, networkTx,
     });
   }));
 
@@ -168,10 +176,57 @@ async function collectMetrics() {
 }
 
 // ─────────────────────────────────────────────
-// REPORT TO BACKEND
-// Sends a heartbeat + metrics payload to the
-// central backend. If backend is unreachable,
-// logs the error and retries next interval.
+// DETECT ANOMALIES + GET LLM ANALYSIS
+// Checks each container for issues and requests
+// LLM remediation advice for problematic ones.
+// ─────────────────────────────────────────────
+
+async function analyzeAnomalies(containers) {
+  const analyses = [];
+
+  for (const c of containers) {
+    const issues = [];
+
+    // Track issues
+    if (c.status === 'restarting') {
+      recordIssue(c.name, 'restart', 1);
+      const restartCount = getIssueCount(c.name, 'restart');
+      issues.push(`Container is restarting (${restartCount} restart(s) in last 5 minutes)`);
+    }
+    if (c.status === 'exited' || c.status === 'dead') {
+      recordIssue(c.name, 'crash', 1);
+      const crashCount = getIssueCount(c.name, 'crash');
+      issues.push(`Container has crashed/exited (${crashCount} time(s) in last 5 minutes)`);
+    }
+    if (c.cpuPct != null && c.cpuPct >= 90) {
+      recordIssue(c.name, 'cpu', c.cpuPct);
+      const cpuCount = getIssueCount(c.name, 'cpu');
+      issues.push(`Critical CPU usage: ${c.cpuPct}% (sustained for ${cpuCount} report cycles)`);
+    }
+    if (c.memPct != null && c.memPct >= 90) {
+      recordIssue(c.name, 'mem', c.memPct);
+      const memCount = getIssueCount(c.name, 'mem');
+      issues.push(`Critical memory usage: ${c.memPct}% of ${c.memLimitMb}MB (sustained for ${memCount} report cycles)`);
+    }
+
+    if (issues.length > 0) {
+      const analysis = await analyzeWithLLM(c.name, issues);
+      if (analysis) {
+        analyses.push({
+          containerName: c.name,
+          issues,
+          analysis,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  return analyses;
+}
+
+// ─────────────────────────────────────────────
+// REPORT
 // ─────────────────────────────────────────────
 
 let consecutiveFailures = 0;
@@ -179,17 +234,9 @@ let consecutiveFailures = 0;
 async function report() {
   try {
     const containers = await collectMetrics();
+    const analyses = await analyzeAnomalies(containers);
 
-
-    // the payload will give us the summry of: 
-
-    // - who is the agent, what machine is it on? 
-
-    // how much memory does the whole machine have? 
-
-    // etc 
-
-    const payload = {      
+    const payload = {
       agentId: AGENT_ID,
       agentLabel: AGENT_LABEL,
       timestamp: new Date().toISOString(),
@@ -204,24 +251,23 @@ async function report() {
       },
       containers,
       containerCount: containers.filter(c => c.status === 'running').length,
+      analyses, // LLM remediation recommendations
     };
 
-    await axios.post(`${BACKEND_URL}/api/agent/report`, payload, {
-      timeout: 5000,
-    });
+    await axios.post(`${BACKEND_URL}/api/agent/report`, payload, { timeout: 5000 });
 
+    if (analyses.length > 0) {
+      console.log(`[Agent] Reported ${analyses.length} LLM analysis/analyses`);
+    }
     if (consecutiveFailures > 0) {
-      console.log(`[Agent] Reconnected to backend after ${consecutiveFailures} failure(s)`);
+      console.log(`[Agent] Reconnected after ${consecutiveFailures} failure(s)`);
     }
     consecutiveFailures = 0;
-
   } catch (err) {
     consecutiveFailures++;
     console.error(`[Agent] Failed to report (attempt ${consecutiveFailures}): ${err.message}`);
-
-    // After 5 consecutive failures, log a more serious warning
     if (consecutiveFailures === 5) {
-      console.error(`[Agent] Backend appears to be down. Will keep retrying every ${REPORT_INTERVAL}ms`);
+      console.error(`[Agent] Backend appears to be down. Retrying every ${REPORT_INTERVAL}ms`);
     }
   }
 }
@@ -230,17 +276,8 @@ async function report() {
 // START
 // ─────────────────────────────────────────────
 
-// Report immediately on start, then on interval
 report();
 setInterval(report, REPORT_INTERVAL);
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log(`[Agent] ${AGENT_ID} shutting down gracefully`);
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log(`[Agent] ${AGENT_ID} interrupted`);
-  process.exit(0);
-});
+process.on('SIGTERM', () => { console.log(`[Agent] ${AGENT_ID} shutting down`); process.exit(0); });
+process.on('SIGINT',  () => { console.log(`[Agent] ${AGENT_ID} interrupted`);   process.exit(0); });

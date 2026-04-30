@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import {
   Shield, Activity, AlertTriangle, CheckCircle,
   Search, Bell, Download, Play, Settings, Users, FileText,
-  Lock, BarChart2, Box, Clock, Cpu, Database,
+  Lock, Box, Clock, Cpu, Database,
   XCircle, AlertCircle, Info, Layers, Terminal,
   List, ChevronLeft, Wifi, WifiOff, Network, Sun, Moon,
-  ChevronDown, ClipboardList, User
+  ChevronDown, ClipboardList, User, Castle
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -42,9 +42,12 @@ function useSocket() {
   return { connected, on };
 }
 
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // DATA HOOKS
-// ─────────────────────────────────────────────
+// Each hook owns one slice of backend data. They all follow the same pattern:
+// fetch on mount, listen for Socket.io updates, fall back to polling every N
+// seconds in case the socket misses something. The socket always wins for speed.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function useContainers(socket) {
   const [containers, setContainers] = useState([]);
@@ -83,6 +86,7 @@ function useAgents(socket) {
 function useAlerts(socket) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [socketUpdateCount, setSocketUpdateCount] = useState(0);
   const load = () => {
     fetch('http://localhost:3002/api/alerts')
       .then(res => res.json())
@@ -91,11 +95,15 @@ function useAlerts(socket) {
   };
   useEffect(() => {
     load();
-    socket.on('alerts:update', data => { setAlerts(data); setLoading(false); });
+    socket.on('alerts:update', data => {
+      setAlerts(data);
+      setLoading(false);
+      setSocketUpdateCount(c => c + 1);
+    });
   }, []);
-  const acknowledge = (id) => fetch(`http://localhost:3002/api/alerts/${id}/acknowledge`, { method: 'POST' }).then(load);
-  const acknowledgeAll = () => fetch('http://localhost:3002/api/alerts/acknowledge-all', { method: 'POST' }).then(load);
-  return { alerts, loading, error: null, acknowledge, acknowledgeAll };
+  const acknowledge    = (id) => fetch(`http://localhost:3002/api/alerts/${id}/acknowledge`, { method: 'POST' }).then(load);
+  const acknowledgeAll = ()   => fetch('http://localhost:3002/api/alerts/acknowledge-all',    { method: 'POST' }).then(load);
+  return { alerts, loading, error: null, acknowledge, acknowledgeAll, socketUpdateCount };
 }
 
 function useNetworkThreats(socket) {
@@ -114,14 +122,17 @@ function useNetworkThreats(socket) {
 
 function useVulnerabilities() {
   const [vulnerabilities, setVulnerabilities] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
+  const [loading, setLoading] = useState(false);
+  // Not auto-fetched on mount — triggered manually via the RUN SCAN button.
+  // This avoids hammering Trivy every time the page loads or the component remounts.
+  const scan = () => {
+    setLoading(true);
     fetch('http://localhost:3002/api/vulnerabilities')
       .then(res => res.json())
       .then(data => { setVulnerabilities(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, []);
-  return { vulnerabilities, loading, error: null };
+  };
+  return { vulnerabilities, loading, scan };
 }
 
 function useCompliance() {
@@ -130,7 +141,9 @@ function useCompliance() {
   useEffect(() => {
     const load = () => fetch('http://localhost:3002/api/compliance').then(r => r.json()).then(d => { setCompliance(d.results || []); setLoading(false); }).catch(() => setLoading(false));
     load();
-    const interval = setInterval(load, 60000);
+    // Compliance is expensive (Trivy CIS benchmark against 3 images) — run once
+    // on mount then refresh every 10 minutes in the background, not every 60s.
+    const interval = setInterval(load, 600000);
     return () => clearInterval(interval);
   }, []);
   return { compliance, loading, error: null };
@@ -148,22 +161,43 @@ function useStats() {
   return { stats, loading, error: null };
 }
 
-function useScanHistory() { return { scans: [], loading: false, error: null }; }
+function useScanHistory(socket) {
+  const [scans, setScans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch('http://localhost:3002/api/scan-history')
+      .then(r => r.json())
+      .then(d => { setScans(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(() => setLoading(false));
+    socket.on('scan:history', d => { setScans(Array.isArray(d) ? d : []); setLoading(false); });
+  }, []);
+  return { scans, loading };
+}
 
-function useSecrets() {
-  const [secrets, setSecrets] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [scanned, setScanned] = useState(false);
+function useFaultStatus(socket) {
+  const [faultStatus, setFaultStatus] = useState({ active: [], recent: [], networkAgentFallback: false, fallbackAgent: null });
+  useEffect(() => {
+    fetch('http://localhost:3002/api/fault-status').then(r => r.json()).then(setFaultStatus).catch(() => {});
+    socket.on('fault:status', setFaultStatus);
+    const interval = setInterval(() => {
+      fetch('http://localhost:3002/api/fault-status').then(r => r.json()).then(setFaultStatus).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+  return faultStatus;
+}
 
-  const scan = () => {
-    setLoading(true);
-    fetch('http://localhost:3002/api/secrets')
-      .then(res => res.json())
-      .then(data => { setSecrets(Array.isArray(data) ? data : []); setLoading(false); setScanned(true); })
-      .catch(() => { setLoading(false); setScanned(true); });
-  };
-
-  return { secrets, loading, scanned, scan };
+function useLLMAnalyses(socket) {
+  const [analyses, setAnalyses] = useState([]);
+  useEffect(() => {
+    fetch('http://localhost:3002/api/llm-analyses').then(r => r.json()).then(d => setAnalyses(Array.isArray(d) ? d : [])).catch(() => {});
+    socket.on('llm:analyses', d => setAnalyses(Array.isArray(d) ? d : []));
+    const interval = setInterval(() => {
+      fetch('http://localhost:3002/api/llm-analyses').then(r => r.json()).then(d => setAnalyses(Array.isArray(d) ? d : [])).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+  return analyses;
 }
 
 function useAudit(socket) {
@@ -179,7 +213,6 @@ function useAudit(socket) {
 
   useEffect(() => {
     load();
-    // Refresh audit log whenever alerts update (new events may have been logged)
     socket.on('alerts:update', () => load());
     const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
@@ -188,9 +221,12 @@ function useAudit(socket) {
   return { events, loading };
 }
 
-// ─────────────────────────────────────────────
-// DESIGN TOKENS
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN TOKENS + THEME
+// Two themes: dark (default) and warm beige/cream light mode.
+// C is the global theme object — applyTheme() updates it and also refreshes
+// TH/TD table styles since they reference C values.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const DARK = {
   bg:         "#050709",
@@ -254,9 +290,15 @@ const HEALTH_COLOR = { ok: "#34d399", warn: "#fbbf24", crit: "#fb7185" };
 const ALERT_COLOR  = { critical: "#fb7185", warning: "#fbbf24", info: "#38bdf8" };
 const ALERT_ICON   = { critical: XCircle, warning: AlertCircle, info: Info };
 
-// ─────────────────────────────────────────────
 // PRIMITIVES
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI PRIMITIVES
+// Small reusable building blocks used throughout the dashboard.
+// Mono = monospace text, SeverityBadge = colored CRITICAL/HIGH/etc label,
+// HealthDot = green/amber/red circle, Sparkline = mini CPU/memory chart,
+// Panel = bordered card container, StatCard = top-level metric card.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function Mono({ children, color, size = 11, style }) {
   return <span style={{ fontFamily: mono, fontSize: size, color: color || C.textDim, ...style }}>{children}</span>;
@@ -287,6 +329,77 @@ function StatusPill({ status }) {
 function HealthDot({ health }) {
   const color = HEALTH_COLOR[health] || C.textDim;
   return <span style={{ width: 8, height: 8, borderRadius: "50%", display: "inline-block", flexShrink: 0, background: color, boxShadow: `0 0 8px ${color}` }} />;
+}
+
+// Animates a number counting up from 0 when the value changes
+function CountUpNumber({ value, duration = 900 }) {
+  const [display, setDisplay] = useState(value);
+  useEffect(() => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      let frameId, startTime;
+      const animate = (ts) => {
+        if (!startTime) startTime = ts;
+        const progress = Math.min((ts - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        setDisplay(Math.round(value * eased));
+        if (progress < 1) frameId = requestAnimationFrame(animate);
+      };
+      setDisplay(0);
+      frameId = requestAnimationFrame(animate);
+      return () => cancelAnimationFrame(frameId);
+    }
+    if (typeof value === 'string') {
+      const match = value.trim().match(/^(-?\d+(?:\.\d+)?)%$/);
+      if (match) {
+        const final = Number(match[1]);
+        let frameId, startTime;
+        const animate = (ts) => {
+          if (!startTime) startTime = ts;
+          const progress = Math.min((ts - startTime) / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          setDisplay(`${Math.round(final * eased)}%`);
+          if (progress < 1) frameId = requestAnimationFrame(animate);
+        };
+        setDisplay('0%');
+        frameId = requestAnimationFrame(animate);
+        return () => cancelAnimationFrame(frameId);
+      }
+    }
+    setDisplay(value);
+  }, [value, duration]);
+  return <>{display ?? '—'}</>;
+}
+
+// Toast alert notifications — appear top-right when new alerts come in
+function ToastNotifications({ toasts, onClose }) {
+  return (
+    <div style={{ position: "fixed", top: 76, right: 24, zIndex: 120, display: "flex", flexDirection: "column", gap: 10, pointerEvents: "none" }}>
+      {toasts.map(toast => {
+        const color = ALERT_COLOR[toast.severity] || C.cyan;
+        const Icon  = ALERT_ICON[toast.severity]  || Info;
+        return (
+          <div key={toast.id} style={{ width: 340, background: C.surface, border: `1px solid ${C.border2}`, borderLeft: `3px solid ${color}`, borderRadius: 8, boxShadow: "0 14px 32px rgba(0,0,0,0.28)", overflow: "hidden", pointerEvents: "auto" }}>
+            <div style={{ padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <Icon size={15} color={color} strokeWidth={1.7} style={{ marginTop: 2, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 700, color: C.textBright, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{toast.title}</div>
+                    <span style={{ fontFamily: mono, fontSize: 8, color, letterSpacing: "0.12em", background: `${color}18`, border: `1px solid ${color}44`, padding: "1px 6px", borderRadius: 3, flexShrink: 0 }}>{(toast.severity || 'info').toUpperCase()}</span>
+                  </div>
+                  <div style={{ fontFamily: sans, fontSize: 11, color: C.text, lineHeight: 1.45, marginBottom: 4 }}>{toast.description}</div>
+                  <Mono size={9} color={C.textDim}>{toast.source ? `SOURCE: ${toast.source}` : 'SOURCE: SYSTEM'}</Mono>
+                </div>
+                <button onClick={() => onClose(toast.id)} style={{ background: "transparent", border: "none", color: C.textDim, cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                  <XCircle size={14} strokeWidth={1.5} />
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function Sparkline({ data, color, width = 80, height = 28 }) {
@@ -346,13 +459,15 @@ function Panel({ title, icon: Icon, action, onAction, children, style }) {
   );
 }
 
-function StatCard({ label, value, accent, icon: Icon }) {
+function StatCard({ label, value, accent, icon: Icon, animated = false }) {
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "22px 20px", position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg, ${accent}, transparent)` }} />
       <div style={{ position: "absolute", bottom: -8, right: -8, opacity: 0.06 }}><Icon size={72} strokeWidth={1} color={accent} /></div>
       <Label>{label}</Label>
-      <div style={{ fontSize: 36, fontWeight: 700, fontFamily: mono, color: accent, lineHeight: 1, marginBottom: 4 }}>{value ?? "—"}</div>
+      <div style={{ fontSize: 36, fontWeight: 700, fontFamily: mono, color: accent, lineHeight: 1, marginBottom: 4 }}>
+        {animated ? <CountUpNumber value={value} /> : (value ?? '—')}
+      </div>
     </div>
   );
 }
@@ -366,6 +481,12 @@ const getTD = () => ({ padding: "12px 18px", fontSize: 12, borderBottom: `1px so
 // Keep TH/TD as aliases for backward compat — components that use them inline will pick up current C
 let TH = getTH();
 let TD = getTD();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VULNERABILITY TABLE
+// Clickable rows that expand to show full CVE details pulled from Trivy:
+// description, fix version, published date, and reference links.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function VulnTable({ rows }) {
   const [expanded, setExpanded] = useState(null);
@@ -483,9 +604,15 @@ function VulnTable({ rows }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // ROLES
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROLE-BASED ACCESS CONTROL (RBAC)
+// Three roles: Admin (full access), Analyst (compliance/audit only),
+// DevOps (monitoring/alerts only). Each role has its own nav allowlist,
+// task list, and description. Switching roles is done via the topbar dropdown —
+// no page reload needed, just a state update that re-filters the sidebar.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const ROLES = {
   admin: {
@@ -541,104 +668,63 @@ const ROLES = {
   },
 };
 
-// ─────────────────────────────────────────────
-// LOGIN SCREEN
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FAULT BANNER
+// Shows at the top of every page when something is actively wrong.
+// The network agent failover banner is the most prominent — bright yellow,
+// tells you exactly which agent stepped in to cover. Other fault events
+// show below it in a collapsible red panel.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }) {
-  const [hovering, setHovering] = useState(null);
-  const [loginDark, setLoginDark] = useState(true);
-  const bg = loginDark ? DARK : LIGHT;
+function FaultBanner({ faultStatus }) {
+  const { active, networkAgentFallback, fallbackAgent } = faultStatus;
+  if (!networkAgentFallback && active.length === 0) return null;
 
   return (
-    <div style={{ minHeight: "100vh", background: bg.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: sans, padding: 24, position: "relative", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
       <style>{`
-        @keyframes float-1 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-18px) rotate(3deg)} }
-        @keyframes float-2 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-12px) rotate(-2deg)} }
-        @keyframes float-3 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-22px)} }
-        @keyframes pulse-glow { 0%,100%{box-shadow:0 0 20px ${DARK.cyan}33} 50%{box-shadow:0 0 40px ${DARK.cyan}66} }
-        @keyframes shimmer { 0%{opacity:0.03} 50%{opacity:0.07} 100%{opacity:0.03} }
+        @keyframes fault-pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+        @keyframes slide-in { from{transform:translateY(-100%);opacity:0} to{transform:translateY(0);opacity:1} }
       `}</style>
 
-      {/* Animated background blobs */}
-      <div style={{ position: "absolute", width: 400, height: 400, borderRadius: "50%", background: `radial-gradient(circle, ${DARK.cyan}08, transparent 70%)`, top: -100, left: -100, animation: "float-1 8s ease-in-out infinite" }} />
-      <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", background: `radial-gradient(circle, #7c3aed08, transparent 70%)`, bottom: -80, right: -60, animation: "float-2 10s ease-in-out infinite" }} />
-      <div style={{ position: "absolute", width: 200, height: 200, borderRadius: "50%", background: `radial-gradient(circle, ${DARK.green}06, transparent 70%)`, top: "40%", right: "10%", animation: "float-3 7s ease-in-out infinite" }} />
-
-      {/* Theme toggle */}
-      <button onClick={() => setLoginDark(d => !d)}
-        style={{ position: "absolute", top: 24, right: 24, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${bg.border2}`, borderRadius: 8, cursor: "pointer", background: "transparent", zIndex: 10 }}>
-        {loginDark ? <Sun size={15} color={DARK.amber} strokeWidth={1.5} /> : <Moon size={15} color={LIGHT.cyan} strokeWidth={1.5} />}
-      </button>
-
-      {/* Header */}
-      <div style={{ marginBottom: 48, textAlign: "center", position: "relative", zIndex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 20 }}>
-          <div style={{ width: 56, height: 56, background: `${DARK.cyan}15`, border: `1.5px solid ${DARK.cyan}55`, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", animation: "pulse-glow 3s ease-in-out infinite" }}>
-            <Shield size={28} color={DARK.cyan} strokeWidth={1.5} />
+      {/* Network agent failover banner — most prominent */}
+      {networkAgentFallback && (
+        <div style={{ background: `linear-gradient(90deg, ${C.amber}22, ${C.amber}12)`, borderBottom: `2px solid ${C.amber}`, padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, animation: "slide-in 0.3s ease" }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, animation: "fault-pulse 1.5s ease-in-out infinite", flexShrink: 0 }} />
+          <AlertTriangle size={14} color={C.amber} strokeWidth={2} />
+          <div style={{ flex: 1 }}>
+            <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: C.amber }}>NETWORK AGENT OFFLINE — </span>
+            <span style={{ fontFamily: sans, fontSize: 13, color: C.text }}>
+              {fallbackAgent} is handling network security monitoring until Network-Intrusion-Detector recovers.
+            </span>
           </div>
-          <div style={{ textAlign: "left" }}>
-            <div style={{ fontSize: 30, fontWeight: 700, color: bg.textBright, letterSpacing: "-0.02em" }}>ContainerShield</div>
-            <div style={{ fontFamily: mono, fontSize: 10, color: bg.textDim, letterSpacing: "0.18em" }}>DISTRIBUTED SECURITY PLATFORM</div>
-          </div>
+          <span style={{ fontFamily: mono, fontSize: 9, padding: "3px 8px", background: `${C.amber}22`, border: `1px solid ${C.amber}55`, color: C.amber, borderRadius: 3, letterSpacing: "0.1em", flexShrink: 0 }}>FAILOVER ACTIVE</span>
         </div>
-        <div style={{ fontFamily: sans, fontSize: 15, color: bg.textDim, fontWeight: 400 }}>Select your role to access your personalized dashboard</div>
-      </div>
+      )}
 
-      {/* Role cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18, maxWidth: 800, width: "100%", position: "relative", zIndex: 1 }}>
-        {Object.values(ROLES).map(role => (
-          <div key={role.id}
-            onClick={() => onLogin(role.id)}
-            onMouseEnter={() => setHovering(role.id)}
-            onMouseLeave={() => setHovering(null)}
-            style={{ background: hovering === role.id ? `${bg.surface2}` : bg.surface, border: `1.5px solid ${hovering === role.id ? role.color + 'aa' : bg.border}`, borderRadius: 14, padding: "28px 24px", cursor: "pointer", transition: "all 0.18s", position: "relative", overflow: "hidden", transform: hovering === role.id ? "translateY(-4px)" : "translateY(0)", boxShadow: hovering === role.id ? `0 12px 32px ${role.color}22` : "none" }}>
-            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${role.color}, ${role.color}44)`, opacity: hovering === role.id ? 1 : 0.5, transition: "opacity 0.18s" }} />
-            <div style={{ position: "absolute", bottom: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: `${role.color}08`, animation: "shimmer 3s ease-in-out infinite" }} />
-
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <div style={{ width: 42, height: 42, borderRadius: 10, background: `${role.color}18`, border: `1.5px solid ${role.color}55`, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.18s", boxShadow: hovering === role.id ? `0 0 16px ${role.color}44` : "none" }}>
-                <User size={18} color={role.color} strokeWidth={1.5} />
-              </div>
-              <div>
-                <div style={{ fontFamily: sans, fontSize: 15, fontWeight: 700, color: bg.textBright }}>{role.label}</div>
-                <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: `${role.color}18`, color: role.color, border: `1px solid ${role.color}44`, letterSpacing: "0.1em" }}>
-                  {role.id.toUpperCase()}
-                </span>
-              </div>
-            </div>
-
-            <div style={{ fontFamily: sans, fontSize: 12, color: bg.textDim, lineHeight: 1.7, marginBottom: 18 }}>{role.description}</div>
-
-            <div style={{ borderTop: `1px solid ${bg.border}`, paddingTop: 14 }}>
-              <div style={{ fontFamily: mono, fontSize: 8, color: bg.textDim, letterSpacing: "0.12em", marginBottom: 8 }}>PAGE ACCESS</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {role.nav.filter(n => n !== 'tasks').map(n => (
-                  <span key={n} style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: bg.surface2, color: bg.textDim, border: `1px solid ${bg.border}` }}>
-                    {n.toUpperCase()}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px", borderRadius: 6, background: `${role.color}${hovering === role.id ? '22' : '10'}`, transition: "all 0.18s" }}>
-              <span style={{ fontFamily: mono, fontSize: 10, color: role.color, fontWeight: 700, letterSpacing: "0.08em" }}>ENTER AS {role.id.toUpperCase()}</span>
-              <ChevronDown size={11} color={role.color} style={{ transform: "rotate(-90deg)" }} />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 40, fontFamily: mono, fontSize: 9, color: bg.textDim, letterSpacing: "0.12em", position: "relative", zIndex: 1 }}>
-        CONTAINERSHIELD · ROLE-BASED ACCESS CONTROL DEMO
-      </div>
+      {/* Active fault events */}
+      {active.filter(e => e.type !== 'network_agent_offline').map(e => (
+        <div key={e.id} style={{ background: e.severity === 'critical' ? `${C.red}15` : `${C.amber}12`, borderBottom: `1px solid ${e.severity === 'critical' ? C.red + '55' : C.amber + '44'}`, padding: "8px 28px", display: "flex", alignItems: "center", gap: 12, animation: "slide-in 0.3s ease" }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: e.severity === 'critical' ? C.red : C.amber, animation: "fault-pulse 1s ease-in-out infinite", flexShrink: 0 }} />
+          <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, color: e.severity === 'critical' ? C.red : C.amber }}>{e.title}</span>
+          <span style={{ fontFamily: sans, fontSize: 11, color: C.textDim, flex: 1 }}>{e.description}</span>
+          <Mono size={9} color={C.textDim}>{new Date(e.timestamp).toLocaleTimeString()}</Mono>
+        </div>
+      ))}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────
+// TOAST NOTIFICATIONS
+
 // SIDEBAR
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAVIGATION + SIDEBAR
+// NAV_ALL defines every possible sidebar item. The Sidebar component filters
+// it down to only the pages the current role is allowed to access.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const NAV_ALL = [
   { section: "Monitor", items: [
@@ -674,11 +760,11 @@ function Sidebar({ active, onNav, role }) {
       <div style={{ padding: "22px 20px 18px", borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 32, height: 32, background: `${C.cyan}18`, border: `1px solid ${C.cyan}55`, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Shield size={16} color={C.cyan} strokeWidth={1.5} />
+            <Castle size={16} color={C.cyan} strokeWidth={1.5} />
           </div>
           <div>
-            <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: C.textBright, letterSpacing: "0.01em" }}>ContainerShield</div>
-            <Mono size={8} color={C.textDim}>SECURITY PLATFORM</Mono>
+            <div style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: C.textBright, letterSpacing: "0.01em" }}>Citadel</div>
+            <Mono size={8} color={C.textDim}>CONTAINER SECURITY</Mono>
           </div>
         </div>
       </div>
@@ -712,14 +798,19 @@ function Sidebar({ active, onNav, role }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // TOPBAR
-// ─────────────────────────────────────────────
 
-const ALERT_ICON_MAP = { critical: XCircle, warning: AlertCircle, info: Info };
-const ALERT_COLOR_MAP = { critical: C.red, warning: C.amber, info: C.cyan };
+// ─────────────────────────────────────────────────────────────────────────────
+// TOPBAR
+// The sticky header. Contains: live/offline indicator, agent count, date,
+// role badge (with dropdown to switch perspectives), dark/light toggle,
+// export PDF button, run vulnerability scan button, and the alerts bell.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function Topbar({ clusterName, containerCount, alertCount, alerts, connected, dark, onToggleDark, onScan, onExport, onAcknowledge, onAcknowledgeAll, role, onRoleChange }) {
+const ALERT_ICON_MAP  = { critical: XCircle, warning: AlertCircle, info: Info };
+const ALERT_COLOR_MAP = { critical: C.red,   warning: C.amber,     info: C.cyan };
+
+function Topbar({ clusterName, containerCount, alertCount, alerts, connected, dark, onToggleDark, onScan, onExport, onAcknowledge, onAcknowledgeAll, role, onRoleChange, secretsScanning }) {
   const [open, setOpen] = useState(false);
   const [roleOpen, setRoleOpen] = useState(false);
   const currentRole = ROLES[role];
@@ -782,6 +873,13 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
           onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
           {dark ? <Sun size={15} color={C.amber} strokeWidth={1.5} /> : <Moon size={15} color={C.cyan} strokeWidth={1.5} />}
         </button>
+
+        {secretsScanning && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", background: `${C.cyan}12`, border: `1px solid ${C.cyan}44`, borderRadius: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.cyan, animation: "blink 1s ease-in-out infinite" }} />
+            <Mono size={9} color={C.cyan}>SECRETS SCANNING…</Mono>
+          </div>
+        )}
 
         <button onClick={onExport} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: "pointer", letterSpacing: "0.05em" }}>
           <Download size={12} strokeWidth={1.5} /> EXPORT
@@ -851,21 +949,149 @@ function Topbar({ clusterName, containerCount, alertCount, alerts, connected, da
 }
 
 // ─────────────────────────────────────────────
-// PAGE: DASHBOARD
+// FAULT STATUS PANEL
 // ─────────────────────────────────────────────
 
-function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, acknowledge, threats, scans, compliance, stats, ls, lv, lcont, la, lcomp, lsc, onNav }) {
+function NetworkAgentFallbackBanner({ fallbackAgent }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", background: `${C.amber}18`, border: `1px solid ${C.amber}66`, borderRadius: 8, marginBottom: 16, animation: "pulse-border 2s ease-in-out infinite" }}>
+      <style>{`@keyframes pulse-border { 0%,100%{border-color:${C.amber}66} 50%{border-color:${C.amber}cc} }`}</style>
+      <AlertTriangle size={16} color={C.amber} strokeWidth={2} style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1 }}>
+        <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: C.amber }}>Network Agent Offline — Failover Active</span>
+        <span style={{ fontFamily: sans, fontSize: 12, color: C.text, marginLeft: 8 }}>
+          {fallbackAgent} is handling network security monitoring until Network-Intrusion-Detector recovers.
+        </span>
+      </div>
+      <span style={{ fontFamily: mono, fontSize: 9, padding: "3px 8px", borderRadius: 3, background: `${C.amber}22`, color: C.amber, border: `1px solid ${C.amber}55`, letterSpacing: "0.08em", flexShrink: 0 }}>
+        AUTONOMOUS FAILOVER
+      </span>
+    </div>
+  );
+}
+
+function FaultStatusPanel({ faultStatus }) {
+  const { active, recent, networkAgentFallback, fallbackAgent } = faultStatus;
+  const [expanded, setExpanded] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  // Auto-clear dismissed state when new faults appear
+  useEffect(() => { if (active.length > 0) setDismissed(false); }, [active.length]);
+
+  if ((active.length === 0 && !networkAgentFallback) || dismissed) return null;
+
+  const sevColor = { critical: C.red, warning: C.amber, info: C.cyan };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {networkAgentFallback && <NetworkAgentFallbackBanner fallbackAgent={fallbackAgent} />}
+      {active.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px", background: `${C.red}08` }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, boxShadow: `0 0 8px ${C.red}` }} />
+            <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: C.red, flex: 1 }}>
+              {active.length} Active Fault Event{active.length > 1 ? 's' : ''} — Autonomous Correction Running
+            </span>
+            <button onClick={() => setExpanded(e => !e)} style={{ fontFamily: mono, fontSize: 9, color: C.textDim, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
+              {expanded ? "▲ HIDE" : "▼ SHOW"}
+            </button>
+            <button onClick={() => setDismissed(true)} style={{ fontFamily: mono, fontSize: 9, color: C.textDim, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 3, padding: "2px 8px", cursor: "pointer" }}>
+              ✕
+            </button>
+          </div>
+          {expanded && (
+            <div>
+              {active.map(e => (
+                <div key={e.id} style={{ display: "flex", gap: 12, padding: "12px 18px", borderTop: `1px solid ${C.border}`, alignItems: "flex-start" }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: sevColor[e.severity] || C.textDim, marginTop: 5, flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: sans, fontSize: 12, fontWeight: 600, color: C.textBright, marginBottom: 2 }}>{e.title}</div>
+                    <div style={{ fontFamily: sans, fontSize: 11, color: C.text, lineHeight: 1.5 }}>{e.description}</div>
+                    <Mono size={9} color={C.textDim} style={{ marginTop: 4 }}>{new Date(e.timestamp).toLocaleTimeString()}</Mono>
+                  </div>
+                  <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: `${sevColor[e.severity] || C.textDim}18`, color: sevColor[e.severity] || C.textDim, border: `1px solid ${sevColor[e.severity] || C.textDim}44`, flexShrink: 0 }}>
+                    {e.severity?.toUpperCase()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// LLM ANALYSIS PANEL
+// Shows AI remediation recommendations from agents
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LLM ANALYSIS PANEL
+// When agents detect a container misbehaving (CPU spike, restart loop,
+// memory pressure), they call OpenAI and send the analysis back here.
+// This panel shows the AI's remediation recommendation per container.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LLMAnalysisPanel({ analyses }) {
+  if (!analyses || analyses.length === 0) return null;
+
+  return (
+    <Panel title="AI Remediation Advisor" icon={Activity} style={{ marginBottom: 16 }}>
+      {analyses.map(a => (
+        <div key={a.id} style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}
+          onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <Mono size={11} color={C.cyan} style={{ fontWeight: 700 }}>{a.containerName}</Mono>
+            <Mono size={9} color={C.textDim}>via {a.agentLabel}</Mono>
+            <Mono size={9} color={C.textDim} style={{ marginLeft: "auto" }}>{new Date(a.timestamp).toLocaleTimeString()}</Mono>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+            {(a.issues || []).map((issue, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={10} color={C.amber} strokeWidth={2} />
+                <Mono size={10} color={C.amber}>{issue}</Mono>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: `${C.cyan}08`, border: `1px solid ${C.cyan}33`, borderRadius: 6, padding: "10px 14px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ width: 18, height: 18, borderRadius: 4, background: `${C.cyan}18`, border: `1px solid ${C.cyan}44`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+              <span style={{ fontFamily: mono, fontSize: 8, color: C.cyan, fontWeight: 700 }}>AI</span>
+            </div>
+            <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.6 }}>{a.analysis}</div>
+          </div>
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
+// PAGE: DASHBOARD
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: DASHBOARD (home)
+// The main landing page. Shows stat cards, network threats, container health,
+// top vulnerabilities, live alerts, scan history, and compliance summary.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, acknowledge, threats, scans, compliance, stats, ls, lv, lcont, la, lcomp, lsc, onNav, faultStatus, llmAnalyses }) {
   const previewVulns = vulnerabilities.slice(0, 5);
 
   return (
     <div style={{ padding: "24px 28px", flex: 1 }}>
 
+      {/* FAULT STATUS — always visible at the top when active */}
+      <FaultStatusPanel faultStatus={faultStatus || { active: [], recent: [], networkAgentFallback: false }} />
+
+      {/* LLM ANALYSIS — shown when AI has remediation advice */}
+      <LLMAnalysisPanel analyses={llmAnalyses} />
+
       {/* STAT CARDS */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
-        <StatCard label="Containers Active" value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} />
-        <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} />
-        <StatCard label="Compliance Score" value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} />
-        <StatCard label="Active Alerts" value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} />
+        <StatCard label="Containers Active"       value={ls ? "…" : stats?.totalContainers} icon={Box} accent={C.cyan} animated />
+        <StatCard label="Critical Vulnerabilities" value={lv ? "…" : vulnerabilities.filter(v => v.severity === "critical").length || null} icon={AlertTriangle} accent={C.red} animated />
+        <StatCard label="Compliance Score"         value={ls ? "…" : stats?.complianceScore != null ? `${stats.complianceScore}%` : null} icon={CheckCircle} accent={C.green} animated />
+        <StatCard label="Active Alerts"            value={ls ? "…" : stats?.threatsBlocked} icon={Shield} accent={C.amber} animated />
       </div>
 
       {/* ROW 1 */}
@@ -978,18 +1204,26 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
             )}
           </Panel>
 
-          <Panel title="Scan History" icon={Terminal} action="VIEW ALL" onAction={() => onNav("reports")}>
-            {lsc ? <Loading /> : scans.length === 0 ? <EmptyState icon={Terminal} message="NO SCANS YET" /> :
-              scans.slice(0, 4).map(s => (
-                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${C.border}` }}>
-                  {s.status === "clean" ? <CheckCircle size={13} color={C.green} strokeWidth={1.5} /> : s.status === "error" ? <XCircle size={13} color={C.red} strokeWidth={1.5} /> : <AlertTriangle size={13} color={C.amber} strokeWidth={1.5} />}
-                  <div style={{ flex: 1 }}>
-                    <Mono size={11} color={C.textBright}>{s.target}</Mono>
-                    <div style={{ marginTop: 2 }}><Mono size={9}>{s.timestamp ? new Date(s.timestamp).toLocaleString() : "—"} · {s.type}</Mono></div>
+          <Panel title="Scan History" icon={Terminal} action="VIEW ALL" onAction={() => onNav("audit")}>
+            {lsc ? <Loading /> : scans.length === 0 ? <EmptyState icon={Terminal} message="NO SCANS YET — RUN A SCAN TO SEE HISTORY" /> :
+              scans.slice(0, 5).map(s => {
+                const typeColor = { vulnerability: C.red, compliance: C.green, secrets: C.amber }[s.type] || C.textDim;
+                const typeLabel = { vulnerability: 'VULN', compliance: 'COMPLIANCE', secrets: 'SECRETS' }[s.type] || s.type.toUpperCase();
+                return (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: `1px solid ${C.border}`, transition: "background 0.1s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <span style={{ fontFamily: mono, fontSize: 8, padding: "2px 7px", borderRadius: 3, background: `${typeColor}15`, color: typeColor, border: `1px solid ${typeColor}44`, flexShrink: 0 }}>{typeLabel}</span>
+                    <div style={{ flex: 1 }}>
+                      <Mono size={11} color={C.textBright}>{s.targetCount} image{s.targetCount !== 1 ? 's' : ''} scanned</Mono>
+                      <div style={{ marginTop: 2 }}><Mono size={9}>{s.timestamp ? new Date(s.timestamp).toLocaleString() : "—"}</Mono></div>
+                    </div>
+                    <Mono size={10} color={s.resultCount > 0 ? typeColor : C.green}>
+                      {s.resultCount > 0 ? `${s.resultCount} FOUND` : "CLEAN"}
+                    </Mono>
                   </div>
-                  <Mono size={10} color={s.vulnCount > 0 ? C.red : C.green}>{s.vulnCount != null ? (s.vulnCount === 0 ? "CLEAN" : `${s.vulnCount} VULNS`) : "—"}</Mono>
-                </div>
-              ))
+                );
+              })
             }
           </Panel>
         </div>
@@ -1020,15 +1254,24 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
           }
         </Panel>
       </div>
+
+      {/* LLM AI ANALYSIS — shown when analyses exist */}
+      {llmAnalyses && llmAnalyses.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <LLMAnalysisPanel analyses={llmAnalyses} />
+        </div>
+      )}
     </div>
   );
 }
 
-// ─────────────────────────────────────────────
-// PAGE: VULN SCANNER
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: VULNERABILITY SCANNER
+// Runs Trivy against every running image. Results are sorted by severity.
+// Rows expand to show full CVE description, fix version, and reference links.
+// ─────────────────────────────────────────────────────────────────────────────
 
-function VulnsPage({ vulnerabilities, loading, onBack }) {
+function VulnsPage({ vulnerabilities, loading, onBack, onScan }) {
   const [filter, setFilter] = useState("all");
   const filtered = filter === "all" ? vulnerabilities : vulnerabilities.filter(v => v.severity === filter);
 
@@ -1039,7 +1282,10 @@ function VulnsPage({ vulnerabilities, loading, onBack }) {
           <ChevronLeft size={12} /> BACK
         </button>
         <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Vulnerability Scanner</div>
-        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>{vulnerabilities.length} TOTAL FINDINGS</Mono>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>{vulnerabilities.length > 0 ? `${vulnerabilities.length} TOTAL FINDINGS` : "NOT YET SCANNED"}</Mono>
+        <button onClick={onScan} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, letterSpacing: "0.05em" }}>
+          <Play size={11} strokeWidth={2} /> {loading ? "SCANNING…" : "RUN SCAN"}
+        </button>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -1051,17 +1297,32 @@ function VulnsPage({ vulnerabilities, loading, onBack }) {
       </div>
 
       <Panel title="All Vulnerabilities" icon={Search}>
-        {loading ? <Loading /> : filtered.length === 0 ? <EmptyState icon={Search} message="NO VULNERABILITIES FOUND" /> : <VulnTable rows={filtered} />}
+        {loading ? <Loading /> : filtered.length === 0 && vulnerabilities.length === 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 280, gap: 16 }}>
+              <Search size={32} color={C.border2} strokeWidth={1} />
+              <div style={{ fontFamily: sans, fontSize: 14, color: C.textDim }}>No scan results yet</div>
+              <button onClick={onScan} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>
+                <Play size={12} strokeWidth={2} /> RUN VULNERABILITY SCAN
+              </button>
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState icon={Search} message="NO VULNERABILITIES MATCH THIS FILTER" />
+          ) : <VulnTable rows={filtered} />}
       </Panel>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: LIVE MONITOR
-// ─────────────────────────────────────────────
 
-function MonitorPage({ containers, agents, loading, onBack }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: LIVE MONITOR
+// Real-time view of all containers with CPU/memory sparklines.
+// Also shows all three agents with their status, container count, and host info.
+// RESTART / STOP / START buttons call the backend which calls Docker directly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MonitorPage({ containers, agents, loading, onBack, faultStatus }) {
   return (
     <div style={{ padding: "24px 28px", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
@@ -1075,6 +1336,9 @@ function MonitorPage({ containers, agents, loading, onBack }) {
           <Mono size={10} color={C.red}>{containers.filter(c => c.health === "crit").length} CRITICAL</Mono>
         </div>
       </div>
+
+      {/* Fault status — prominently shown in Live Monitor */}
+      <FaultStatusPanel faultStatus={faultStatus || { active: [], recent: [], networkAgentFallback: false }} />
 
       {agents.length > 0 && (
         <div style={{ marginBottom: 16 }}>
@@ -1202,9 +1466,13 @@ function MonitorPage({ containers, agents, loading, onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: ALERTS
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: ALERTS
+// Shows all active (unacknowledged) alerts. Filterable by severity.
+// Alerts are deduplicated by the backend — same title+source = one alert.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function AlertsPage({ alerts, loading, onBack, onAcknowledge, onAcknowledgeAll }) {
   const [filter, setFilter] = useState("all");
@@ -1270,9 +1538,14 @@ function AlertsPage({ alerts, loading, onBack, onAcknowledge, onAcknowledgeAll }
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: COMPLIANCE
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: COMPLIANCE
+// Runs CIS Docker Benchmark 1.6.0 via Trivy against up to 3 images.
+// Groups checks into Image Security (4.x) and Container Runtime (5.x).
+// Manual checks are excluded from the score — they need human review.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function CompliancePage({ compliance, loading, onBack }) {
   const [expanded, setExpanded] = useState(null);
@@ -1347,14 +1620,19 @@ function CompliancePage({ compliance, loading, onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: SECRETS SCAN
-// ─────────────────────────────────────────────
 
-function SecretsPage({ onBack }) {
-  const { secrets, loading, scanned, scan } = useSecrets();
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: SECRETS SCAN
+// Uses Trivy's secret scanner to find hardcoded credentials in image layers.
+// Runs in parallel with isolated Trivy cache dirs per image to avoid conflicts.
+// State lives in the root component so switching tabs doesn't cancel the scan.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SecretsPage({ onBack, secrets, loading, scanned, onScan }) {
   const [filter, setFilter] = useState("all");
   const filtered = filter === "all" ? secrets : secrets.filter(s => s.severity === filter);
+  const scan = onScan;
 
   return (
     <div style={{ padding: "24px 28px", flex: 1 }}>
@@ -1491,9 +1769,14 @@ function SecretsPage({ onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: AUDIT LOG
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: AUDIT LOG
+// Permanent record of every security event: alerts created/resolved/dismissed,
+// scans started, containers restarted, agents recovered, autonomous restarts.
+// Capped at 500 events in the backend. Refreshes on every alert socket update.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const AUDIT_TYPE_LABEL = {
   alert_created:            { label: 'Alert Created',       color: null },
@@ -1602,9 +1885,13 @@ function AuditPage({ socket, onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: CONFIG
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: CONFIG
+// UI for tweaking alert thresholds (CPU warn/crit, memory warn/crit, agent
+// timeout). These are local to the session — not persisted to the backend yet.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_CONFIG = {
   cpuWarning: 70, cpuCritical: 90,
@@ -1690,9 +1977,14 @@ function ConfigPage({ onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: REPORTS
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: REPORTS
+// Executive security posture summary with PDF export. Uses jsPDF + html2canvas
+// to render a hidden div into a multi-page PDF. Includes agents, alerts,
+// threats, vulnerabilities, compliance, and the full audit log.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function ReportsPage({ containers, vulnerabilities, alerts, compliance, stats, scans, ls, lv, la, lcomp, lsc, onBack, onExport }) {
   const criticalAlerts = alerts.filter(a => a.severity === "critical" && !a.acknowledged).length;
@@ -1767,9 +2059,13 @@ function ReportsPage({ containers, vulnerabilities, alerts, compliance, stats, s
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: TEAM
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: TEAM
+// Shows the three roles, their responsibilities, and incident ownership matrix.
+// Which team member owns what kind of security event (vulns vs downtime etc).
+// ─────────────────────────────────────────────────────────────────────────────
 
 const TEAM_MEMBERS = [
   { id: "admin",    name: "Security Admin",    roleBadge: "Admin",   status: "Active",    focus: "Threat response and platform hardening",        permissions: "Full policy control, alert triage, configuration changes" },
@@ -1854,9 +2150,14 @@ function TeamPage({ onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: MY TASKS
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAGE: MY TASKS
+// Role-specific checklist showing what this user should do during a session.
+// Each task has a priority, a GO→ button that navigates to the relevant page,
+// and a checkbox. Progress bar fills as tasks are completed.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function TasksPage({ role, onBack, onNav }) {
   const roleData = ROLES[role];
@@ -2010,9 +2311,12 @@ function TasksPage({ role, onBack, onNav }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // PAGE: PLACEHOLDER
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLACEHOLDER PAGE
+// Fallback for any nav key that doesn't have a real page yet.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function PlaceholderPage({ title, icon: Icon, onBack }) {
   return (
@@ -2031,29 +2335,100 @@ function PlaceholderPage({ title, icon: Icon, onBack }) {
   );
 }
 
-// ─────────────────────────────────────────────
 // ROOT
-// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT — Dashboard component
+//
+// This is the entry point. It owns all shared state:
+//   - role + activeNav (RBAC + routing)
+//   - dark mode
+//   - secrets scan state (persists across tab changes)
+//   - toast notifications (fires on new Socket.io alerts)
+//   - PDF export logic (jsPDF + html2canvas, loaded from CDN on demand)
+//
+// All data hooks live here and are passed down to pages as props.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [dark, setDark] = useState(true);
-  const [role, setRole] = useState(null);
+  const [role, setRole] = useState("admin"); // default to admin, switch via dropdown
+  const [toasts, setToasts]   = useState([]);
+  const initializedAlertsRef  = useRef(false);
+  const knownAlertIdsRef      = useRef(new Set());
+  const toastTimersRef        = useRef({});
   applyTheme(dark);
 
   const socket = useSocket();
-  const { containers, loading: lcont } = useContainers(socket);
-  const { agents, loading: lagents }   = useAgents(socket);
-  const { vulnerabilities, loading: lv } = useVulnerabilities();
-  const { alerts, loading: la, acknowledge, acknowledgeAll } = useAlerts(socket);
-  const { threats }                    = useNetworkThreats(socket);
-  const { compliance, loading: lcomp } = useCompliance();
-  const { stats, loading: ls }         = useStats();
-  const { scans, loading: lsc }        = useScanHistory();
+  const { containers, loading: lcont }   = useContainers(socket);
+  const { agents, loading: lagents }     = useAgents(socket);
+  const { vulnerabilities, loading: lv, scan: runVulnScan } = useVulnerabilities();
+  const { alerts, loading: la, acknowledge, acknowledgeAll, socketUpdateCount } = useAlerts(socket);
+  const { threats }                      = useNetworkThreats(socket);
+  const { compliance, loading: lcomp }   = useCompliance();
+  const { stats, loading: ls }           = useStats();
+  const { scans, loading: lsc }          = useScanHistory(socket);
+  const faultStatus                      = useFaultStatus(socket);
+  const llmAnalyses                      = useLLMAnalyses(socket);
 
+  const dismissToast = (id) => {
+    if (toastTimersRef.current[id]) { clearTimeout(toastTimersRef.current[id]); delete toastTimersRef.current[id]; }
+    setToasts(t => t.filter(x => x.id !== id));
+  };
+
+  // On first load, seed known IDs so we don't toast existing alerts
+  useEffect(() => {
+    if (!initializedAlertsRef.current && !la) {
+      knownAlertIdsRef.current = new Set(alerts.map(a => a.id));
+      initializedAlertsRef.current = true;
+    }
+  }, [alerts, la]);
+
+  // Show a toast whenever a genuinely new alert arrives via Socket.io
+  useEffect(() => {
+    if (!initializedAlertsRef.current || socketUpdateCount === 0) return;
+    const newAlerts = alerts.filter(a => !knownAlertIdsRef.current.has(a.id));
+    knownAlertIdsRef.current = new Set(alerts.map(a => a.id));
+    if (newAlerts.length === 0) return;
+    const created = newAlerts.map(a => ({
+      id:          `toast-${a.id}-${Date.now()}`,
+      title:       a.title       || 'New Alert',
+      severity:    a.severity    || 'info',
+      source:      a.source      || 'system',
+      description: a.description || 'Security event detected.',
+    }));
+    setToasts(t => [...created, ...t].slice(0, 5));
+    created.forEach(toast => {
+      toastTimersRef.current[toast.id] = setTimeout(() => {
+        setToasts(t => t.filter(x => x.id !== toast.id));
+        delete toastTimersRef.current[toast.id];
+      }, 5000);
+    });
+  }, [alerts, socketUpdateCount]);
+
+  useEffect(() => () => Object.values(toastTimersRef.current).forEach(clearTimeout), []);
   const handleRoleChange = (newRole) => {
     setRole(newRole);
     if (!ROLES[newRole].nav.includes(activeNav)) setActiveNav("dashboard");
+  };
+
+  // Secrets scan state lives at the root so it persists across tab changes
+  const [secrets, setSecrets]               = useState([]);
+  const [secretsLoading, setSecretsLoading] = useState(false);
+  const [secretsScanned, setSecretsScanned] = useState(false);
+
+  const runSecretsScan = () => {
+    setSecretsLoading(true);
+    fetch('http://localhost:3002/api/secrets')
+      .then(res => res.json())
+      .then(data => {
+        const results = Array.isArray(data) ? data : [];
+        setSecrets(results);
+        setSecretsLoading(false);
+        setSecretsScanned(true);
+      })
+      .catch(() => { setSecretsLoading(false); setSecretsScanned(true); });
   };
 
   // ── Export report ──────────────────────────
@@ -2125,7 +2500,7 @@ export default function Dashboard() {
       <!-- Header -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:28px 32px;background:#0d1117;border-radius:10px;margin-bottom:28px">
         <div>
-          <div style="font-size:20px;font-weight:700;color:#f8fafc;margin-bottom:4px">ContainerShield Security Report</div>
+          <div style="font-size:20px;font-weight:700;color:#f8fafc;margin-bottom:4px">Citadel Security Report</div>
           <div style="font-size:10px;color:#7c93ad;font-family:monospace;letter-spacing:0.1em">GENERATED ${now.toLocaleString().toUpperCase()}</div>
         </div>
         <div style="text-align:right">
@@ -2215,7 +2590,7 @@ export default function Dashboard() {
       )}
 
       <div style="text-align:center;margin-top:32px;font-family:monospace;font-size:10px;color:#94a3b8;letter-spacing:0.08em">
-        CONTAINERSHIELD SECURITY PLATFORM · ${now.toISOString()} · CONFIDENTIAL
+        CITADEL CONTAINER SECURITY · ${now.toISOString()} · CONFIDENTIAL
       </div>
     `;
 
@@ -2267,17 +2642,17 @@ export default function Dashboard() {
   function renderPage() {
     switch (activeNav) {
       case "dashboard":
-        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} threats={threats} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} />;
+        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} threats={threats} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} faultStatus={faultStatus} llmAnalyses={llmAnalyses} />;
       case "compliance":
         return <CompliancePage compliance={compliance} loading={lcomp} onBack={() => setActiveNav("dashboard")} />;
       case "alerts":
         return <AlertsPage alerts={alerts} loading={la} onBack={() => setActiveNav("dashboard")} onAcknowledge={acknowledge} onAcknowledgeAll={acknowledgeAll} />;
       case "vulns":
-        return <VulnsPage vulnerabilities={vulnerabilities} loading={lv} onBack={() => setActiveNav("dashboard")} />;
+        return <VulnsPage vulnerabilities={vulnerabilities} loading={lv} onScan={runVulnScan} onBack={() => setActiveNav("dashboard")} />;
       case "monitor":
-        return <MonitorPage containers={containers} agents={agents} loading={lcont} onBack={() => setActiveNav("dashboard")} />;
+        return <MonitorPage containers={containers} agents={agents} loading={lcont} onBack={() => setActiveNav("dashboard")} faultStatus={faultStatus} />;
       case "secrets":
-        return <SecretsPage onBack={() => setActiveNav("dashboard")} />;
+        return <SecretsPage onBack={() => setActiveNav("dashboard")} secrets={secrets} loading={secretsLoading} scanned={secretsScanned} onScan={runSecretsScan} />;
       case "audit":
         return <AuditPage socket={socket} onBack={() => setActiveNav("dashboard")} />;
       case "tasks":
@@ -2294,8 +2669,6 @@ export default function Dashboard() {
     }
   }
 
-  if (!role) return <LoginScreen onLogin={setRole} />;
-
   return (
     <div style={{ display: "flex", background: C.bg, color: C.text, minHeight: "100vh", fontFamily: sans }}>
       <Sidebar active={activeNav} onNav={setActiveNav} role={role} />
@@ -2308,14 +2681,18 @@ export default function Dashboard() {
           connected={socket.connected}
           dark={dark}
           onToggleDark={() => setDark(d => !d)}
-          onScan={() => setActiveNav("vulns")}
+          onScan={() => { runVulnScan(); setActiveNav("vulns"); }}
+          secretsScanning={secretsLoading}
           onExport={handleExport}
           role={role}
           onRoleChange={handleRoleChange}
           onAcknowledge={acknowledge}
           onAcknowledgeAll={acknowledgeAll}
         />
+        <FaultBanner faultStatus={faultStatus} />
+        {llmAnalyses.length > 0 && activeNav === 'monitor' && <div style={{ padding: "0 28px", marginTop: 16 }}><LLMAnalysisPanel analyses={llmAnalyses} /></div>}
         {renderPage()}
+        <ToastNotifications toasts={toasts} onClose={dismissToast} />
       </div>
     </div>
   );
