@@ -1901,40 +1901,120 @@ const DEFAULT_CONFIG = {
 
 function ConfigPage({ onBack }) {
   const [settings, setSettings] = useState(DEFAULT_CONFIG);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
   const saveTimeoutRef = useRef(null);
 
-  // Load whatever thresholds the backend is currently using
   useEffect(() => {
+    let cancelled = false;
+
     fetch('http://localhost:3002/api/config')
-      .then(r => r.json())
-      .then(d => setSettings({
-        cpuWarning:          d.cpuWarn,
-        cpuCritical:         d.cpuCrit,
-        memoryWarning:       d.memWarn,
-        memoryCritical:      d.memCrit,
-        agentOfflineTimeout: Math.round(d.agentTimeoutMs / 1000),
-      }))
-      .catch(() => {});
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to load monitoring configuration');
+        return res.json();
+      })
+      .then(data => {
+        if (cancelled) return;
+        setSettings({
+          cpuWarning: data.cpuWarn,
+          cpuCritical: data.cpuCrit,
+          memoryWarning: data.memWarn,
+          memoryCritical: data.memCrit,
+          agentOfflineTimeout: Math.round((data.agentTimeoutMs || DEFAULT_CONFIG.agentOfflineTimeout * 1000) / 1000),
+        });
+        setError("");
+        setLoading(false);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setError(err.message || 'Failed to load monitoring configuration');
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const updateSetting = (key, value) => { setSettings(c => ({ ...c, [key]: Number(value) })); setSaved(false); };
-  const saveSettings = () => {
-    fetch('http://localhost:3002/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cpuWarn:       settings.cpuWarning,
-        cpuCrit:       settings.cpuCritical,
-        memWarn:       settings.memoryWarning,
-        memCrit:       settings.memoryCritical,
-        agentTimeoutMs: settings.agentOfflineTimeout * 1000,
-      }),
-    })
-      .then(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); })
-      .catch(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); });
+  const updateSetting = (key, value) => {
+    setSettings(c => ({ ...c, [key]: Number(value) }));
+    setSaved(false);
+    setError("");
   };
-  const resetDefaults = () => { setSettings(DEFAULT_CONFIG); setSaved(false); };
+
+  const toBackendConfig = (nextSettings) => ({
+    cpuWarn: nextSettings.cpuWarning,
+    cpuCrit: nextSettings.cpuCritical,
+    memWarn: nextSettings.memoryWarning,
+    memCrit: nextSettings.memoryCritical,
+    agentTimeoutMs: nextSettings.agentOfflineTimeout * 1000,
+  });
+
+  const showSavedMessage = () => {
+    setSaved(true);
+    if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = window.setTimeout(() => setSaved(false), 2200);
+  };
+
+  const saveSettings = async () => {
+    setSaving(true);
+    setError("");
+    setSaved(false);
+
+    try {
+      const response = await fetch('http://localhost:3002/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(toBackendConfig(settings)),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save monitoring configuration');
+
+      setSettings({
+        cpuWarning: data.cpuWarn,
+        cpuCritical: data.cpuCrit,
+        memoryWarning: data.memWarn,
+        memoryCritical: data.memCrit,
+        agentOfflineTimeout: Math.round(data.agentTimeoutMs / 1000),
+      });
+      showSavedMessage();
+    } catch (err) {
+      setError(err.message || 'Failed to save monitoring configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetDefaults = async () => {
+    setSaving(true);
+    setError("");
+    setSaved(false);
+
+    try {
+      const response = await fetch('http://localhost:3002/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(toBackendConfig(DEFAULT_CONFIG)),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to reset monitoring configuration');
+
+      setSettings({
+        cpuWarning: data.cpuWarn,
+        cpuCritical: data.cpuCrit,
+        memoryWarning: data.memWarn,
+        memoryCritical: data.memCrit,
+        agentOfflineTimeout: Math.round(data.agentTimeoutMs / 1000),
+      });
+      showSavedMessage();
+    } catch (err) {
+      setError(err.message || 'Failed to reset monitoring configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const thresholdFields = [
     { key: "cpuWarning",          label: "CPU Warning Threshold",          description: "Warn when container CPU usage crosses this percentage.",              severity: "warning"  },
@@ -1951,13 +2031,13 @@ function ConfigPage({ onBack }) {
           <ChevronLeft size={12} /> BACK
         </button>
         <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Configuration</div>
-        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>LOCAL SETTINGS ONLY</Mono>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>BACKEND CONNECTED</Mono>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
         <Panel title="Threshold Settings" icon={Settings}>
           <div style={{ padding: "18px" }}>
-            <div style={{ display: "grid", gap: 14 }}>
+            {loading ? <Loading /> : <div style={{ display: "grid", gap: 14 }}>
               {thresholdFields.map(field => (
                 <div key={field.key} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
@@ -1972,7 +2052,7 @@ function ConfigPage({ onBack }) {
                   </div>
                 </div>
               ))}
-            </div>
+            </div>}
           </div>
         </Panel>
 
@@ -1980,12 +2060,15 @@ function ConfigPage({ onBack }) {
           <Panel title="Actions" icon={Play}>
             <div style={{ padding: "18px" }}>
               <Label>Save Config</Label>
-              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>Store the current thresholds in component state for this session.</div>
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>Update backend monitoring thresholds used by alerting and the agent watchdog.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <button onClick={saveSettings} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>SAVE SETTINGS</button>
-                <button onClick={resetDefaults} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: "pointer", letterSpacing: "0.05em" }}>RESET DEFAULTS</button>
+                <button onClick={saveSettings} disabled={loading || saving} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading || saving ? "not-allowed" : "pointer", opacity: loading || saving ? 0.6 : 1, letterSpacing: "0.05em" }}>{saving ? "SAVING…" : "SAVE SETTINGS"}</button>
+                <button onClick={resetDefaults} disabled={loading || saving} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: loading || saving ? "not-allowed" : "pointer", opacity: loading || saving ? 0.6 : 1, letterSpacing: "0.05em" }}>RESET DEFAULTS</button>
               </div>
-              <div style={{ minHeight: 18, marginTop: 10 }}>{saved && <Mono size={9} color={C.green}>SETTINGS SAVED LOCALLY</Mono>}</div>
+              <div style={{ minHeight: 18, marginTop: 10 }}>
+                {saved && <Mono size={9} color={C.green}>SETTINGS SAVED TO BACKEND</Mono>}
+                {error && <Mono size={9} color={C.red}>{error}</Mono>}
+              </div>
             </div>
           </Panel>
 

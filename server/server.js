@@ -61,18 +61,51 @@ const docker = new Docker({
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THRESHOLDS
-// Change these if you want alerts to fire at different CPU/memory levels.
-// Agent timeout: how long before we consider an agent offline (in ms).
+// MONITORING CONFIG
+// Runtime-editable monitoring thresholds used by alerting and the agent watchdog.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const THRESHOLDS = {
+const DEFAULT_CONFIG = {
   cpuWarn:        70,
   cpuCrit:        90,
   memWarn:        75,
   memCrit:        90,
   agentTimeoutMs: 30000,
 };
+let monitoringConfig = { ...DEFAULT_CONFIG };
+
+function validateMonitoringConfig(input) {
+  const numericKeys = ['cpuWarn', 'cpuCrit', 'memWarn', 'memCrit', 'agentTimeoutMs'];
+  const nextConfig = {};
+
+  for (const key of numericKeys) {
+    const value = Number(input[key]);
+    if (!Number.isFinite(value)) {
+      return { ok: false, error: `${key} must be a number` };
+    }
+    nextConfig[key] = value;
+  }
+
+  for (const key of ['cpuWarn', 'cpuCrit', 'memWarn', 'memCrit']) {
+    if (nextConfig[key] < 1 || nextConfig[key] > 100) {
+      return { ok: false, error: `${key} must be between 1 and 100` };
+    }
+  }
+
+  if (nextConfig.agentTimeoutMs < 5000 || nextConfig.agentTimeoutMs > 300000) {
+    return { ok: false, error: 'agentTimeoutMs must be between 5000 and 300000' };
+  }
+
+  if (nextConfig.cpuWarn >= nextConfig.cpuCrit) {
+    return { ok: false, error: 'cpuWarn must be less than cpuCrit' };
+  }
+
+  if (nextConfig.memWarn >= nextConfig.memCrit) {
+    return { ok: false, error: 'memWarn must be less than memCrit' };
+  }
+
+  return { ok: true, config: nextConfig };
+}
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -370,7 +403,7 @@ setInterval(async () => {
 
   for (const [id, agent] of agentRegistry.entries()) {
     const age = now - new Date(agent.lastSeen).getTime();
-    if (age <= THRESHOLDS.agentTimeoutMs || agent.status !== 'online') continue;
+    if (age <= monitoringConfig.agentTimeoutMs || agent.status !== 'online') continue;
 
     agent.status = 'offline';
     changed      = true;
@@ -428,15 +461,15 @@ function checkThresholds(agentLabel, containers) {
 
     // CPU
     if (c.cpuPct != null) {
-      if (c.cpuPct >= THRESHOLDS.cpuCrit)       addAlert({ title: 'Critical CPU Usage', description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'critical', source: `cpu-${src}` });
-      else if (c.cpuPct >= THRESHOLDS.cpuWarn)  addAlert({ title: 'High CPU Usage',      description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'warning', source: `cpu-${src}` });
+      if (c.cpuPct >= monitoringConfig.cpuCrit)       addAlert({ title: 'Critical CPU Usage', description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'critical', source: `cpu-${src}` });
+      else if (c.cpuPct >= monitoringConfig.cpuWarn)  addAlert({ title: 'High CPU Usage',      description: `${c.name} is using ${c.cpuPct}% CPU.`, severity: 'warning', source: `cpu-${src}` });
       else { resolveAlert('Critical CPU Usage', `cpu-${src}`); resolveAlert('High CPU Usage', `cpu-${src}`); }
     }
 
     // Memory
     if (c.memPct != null) {
-      if (c.memPct >= THRESHOLDS.memCrit)       addAlert({ title: 'Critical Memory Usage', description: `${c.name} is using ${c.memPct}% memory.`, severity: 'critical', source: `mem-${src}` });
-      else if (c.memPct >= THRESHOLDS.memWarn)  addAlert({ title: 'High Memory Usage',     description: `${c.name} is using ${c.memPct}% memory.`, severity: 'warning', source: `mem-${src}` });
+      if (c.memPct >= monitoringConfig.memCrit)       addAlert({ title: 'Critical Memory Usage', description: `${c.name} is using ${c.memPct}% memory.`, severity: 'critical', source: `mem-${src}` });
+      else if (c.memPct >= monitoringConfig.memWarn)  addAlert({ title: 'High Memory Usage',     description: `${c.name} is using ${c.memPct}% memory.`, severity: 'warning', source: `mem-${src}` });
       else { resolveAlert('Critical Memory Usage', `mem-${src}`); resolveAlert('High Memory Usage', `mem-${src}`); }
     }
   }
@@ -746,6 +779,34 @@ app.get('/api/alerts', (req, res) => {
 });
 
 app.get('/api/audit', (req, res) => res.json(auditStore));
+
+app.get('/api/config', (req, res) => {
+  res.json(monitoringConfig);
+});
+
+app.put('/api/config', (req, res) => {
+  const validation = validateMonitoringConfig(req.body || {});
+  if (!validation.ok) {
+    return res.status(400).json({ error: validation.error });
+  }
+
+  const previous = monitoringConfig;
+  monitoringConfig = { ...validation.config };
+
+  addAuditEvent({
+    type: 'monitoring_config_updated',
+    severity: 'info',
+    source: 'dashboard-config',
+    title: 'Monitoring Configuration Updated',
+    description: 'Monitoring thresholds were updated from the dashboard.',
+    meta: {
+      previous,
+      updated: monitoringConfig,
+    },
+  });
+
+  res.json(monitoringConfig);
+});
 
 app.post('/api/alerts/:id/acknowledge', (req, res) => {
   const alert = alertStore.find(a => a.id === req.params.id);
