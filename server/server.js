@@ -915,7 +915,18 @@ app.get('/api/stats', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/scan-history', (req, res) => res.json(scanHistory));
+app.get('/api/config',  (req, res) => res.json({ cpuWarn: THRESHOLDS.cpuWarn, cpuCrit: THRESHOLDS.cpuCrit, memWarn: THRESHOLDS.memWarn, memCrit: THRESHOLDS.memCrit, agentTimeoutMs: THRESHOLDS.agentTimeoutMs }));
+app.post('/api/config', (req, res) => {
+  const { cpuWarn, cpuCrit, memWarn, memCrit, agentTimeoutMs } = req.body;
+  if (cpuWarn    != null) THRESHOLDS.cpuWarn        = Number(cpuWarn);
+  if (cpuCrit    != null) THRESHOLDS.cpuCrit         = Number(cpuCrit);
+  if (memWarn    != null) THRESHOLDS.memWarn         = Number(memWarn);
+  if (memCrit    != null) THRESHOLDS.memCrit         = Number(memCrit);
+  if (agentTimeoutMs != null) THRESHOLDS.agentTimeoutMs = Number(agentTimeoutMs);
+  console.log('[Config] Thresholds updated:', THRESHOLDS);
+  addAuditEvent({ type: 'config_updated', severity: 'info', source: 'dashboard', title: 'Config Updated', description: `Alert thresholds updated: CPU ${THRESHOLDS.cpuWarn}/${THRESHOLDS.cpuCrit}%, Mem ${THRESHOLDS.memWarn}/${THRESHOLDS.memCrit}%, Agent timeout ${THRESHOLDS.agentTimeoutMs}ms.` });
+  res.json({ ok: true, thresholds: THRESHOLDS });
+});
 app.get('/api/fault-status', (req, res) => res.json(getFaultStatus()));
 app.get('/api/llm-analyses', (req, res) => res.json(llmAnalysisStore));
 app.get('/api/health',       (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString(), agents: getAgentSummary().length }));

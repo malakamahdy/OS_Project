@@ -1904,8 +1904,36 @@ function ConfigPage({ onBack }) {
   const [saved, setSaved] = useState(false);
   const saveTimeoutRef = useRef(null);
 
+  // Load whatever thresholds the backend is currently using
+  useEffect(() => {
+    fetch('http://localhost:3002/api/config')
+      .then(r => r.json())
+      .then(d => setSettings({
+        cpuWarning:          d.cpuWarn,
+        cpuCritical:         d.cpuCrit,
+        memoryWarning:       d.memWarn,
+        memoryCritical:      d.memCrit,
+        agentOfflineTimeout: Math.round(d.agentTimeoutMs / 1000),
+      }))
+      .catch(() => {});
+  }, []);
+
   const updateSetting = (key, value) => { setSettings(c => ({ ...c, [key]: Number(value) })); setSaved(false); };
-  const saveSettings = () => { setSaved(true); if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = window.setTimeout(() => setSaved(false), 2200); };
+  const saveSettings = () => {
+    fetch('http://localhost:3002/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cpuWarn:       settings.cpuWarning,
+        cpuCrit:       settings.cpuCritical,
+        memWarn:       settings.memoryWarning,
+        memCrit:       settings.memoryCritical,
+        agentTimeoutMs: settings.agentOfflineTimeout * 1000,
+      }),
+    })
+      .then(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); })
+      .catch(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); });
+  };
   const resetDefaults = () => { setSettings(DEFAULT_CONFIG); setSaved(false); };
 
   const thresholdFields = [
