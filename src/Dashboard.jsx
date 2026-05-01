@@ -1032,11 +1032,12 @@ function FaultStatusPanel({ faultStatus }) {
 // This panel shows the AI's remediation recommendation per container.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function LLMAnalysisPanel({ analyses }) {
+function LLMAnalysisPanel({ analyses, onDismiss }) {
   if (!analyses || analyses.length === 0) return null;
 
   return (
-    <Panel title="AI Remediation Advisor" icon={Activity} style={{ marginBottom: 16 }}>
+    <Panel title="AI Remediation Advisor" icon={Activity} style={{ marginBottom: 16 }}
+      action="✕ DISMISS" onAction={onDismiss}>
       {analyses.map(a => (
         <div key={a.id} style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}
           onMouseEnter={e => e.currentTarget.style.background = C.surface2}
@@ -1074,7 +1075,7 @@ function LLMAnalysisPanel({ analyses }) {
 // top vulnerabilities, live alerts, scan history, and compliance summary.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, acknowledge, threats, scans, compliance, stats, ls, lv, lcont, la, lcomp, lsc, onNav, faultStatus, llmAnalyses }) {
+function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, acknowledge, threats, scans, compliance, stats, ls, lv, lcont, la, lcomp, lsc, onNav, faultStatus, llmAnalyses, llmDismissed, onLlmDismiss }) {
   const previewVulns = vulnerabilities.slice(0, 5);
 
   return (
@@ -1084,7 +1085,7 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
       <FaultStatusPanel faultStatus={faultStatus || { active: [], recent: [], networkAgentFallback: false }} />
 
       {/* LLM ANALYSIS — shown when AI has remediation advice */}
-      <LLMAnalysisPanel analyses={llmAnalyses} />
+      {!llmDismissed && <LLMAnalysisPanel analyses={llmAnalyses} onDismiss={onLlmDismiss} />}
 
       {/* STAT CARDS */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
@@ -1256,9 +1257,9 @@ function DashboardPage({ containers, vulnerabilities, alerts, acknowledgeAll, ac
       </div>
 
       {/* LLM AI ANALYSIS — shown when analyses exist */}
-      {llmAnalyses && llmAnalyses.length > 0 && (
+      {!llmDismissed && llmAnalyses && llmAnalyses.length > 0 && (
         <div style={{ marginTop: 22 }}>
-          <LLMAnalysisPanel analyses={llmAnalyses} />
+          <LLMAnalysisPanel analyses={llmAnalyses} onDismiss={onLlmDismiss} />
         </div>
       )}
     </div>
@@ -1901,120 +1902,40 @@ const DEFAULT_CONFIG = {
 
 function ConfigPage({ onBack }) {
   const [settings, setSettings] = useState(DEFAULT_CONFIG);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
   const saveTimeoutRef = useRef(null);
 
+  // Load whatever thresholds the backend is currently using
   useEffect(() => {
-    let cancelled = false;
-
     fetch('http://localhost:3002/api/config')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to load monitoring configuration');
-        return res.json();
-      })
-      .then(data => {
-        if (cancelled) return;
-        setSettings({
-          cpuWarning: data.cpuWarn,
-          cpuCritical: data.cpuCrit,
-          memoryWarning: data.memWarn,
-          memoryCritical: data.memCrit,
-          agentOfflineTimeout: Math.round((data.agentTimeoutMs || DEFAULT_CONFIG.agentOfflineTimeout * 1000) / 1000),
-        });
-        setError("");
-        setLoading(false);
-      })
-      .catch(err => {
-        if (cancelled) return;
-        setError(err.message || 'Failed to load monitoring configuration');
-        setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      .then(r => r.json())
+      .then(d => setSettings({
+        cpuWarning:          d.cpuWarn,
+        cpuCritical:         d.cpuCrit,
+        memoryWarning:       d.memWarn,
+        memoryCritical:      d.memCrit,
+        agentOfflineTimeout: Math.round(d.agentTimeoutMs / 1000),
+      }))
+      .catch(() => {});
   }, []);
 
-  const updateSetting = (key, value) => {
-    setSettings(c => ({ ...c, [key]: Number(value) }));
-    setSaved(false);
-    setError("");
+  const updateSetting = (key, value) => { setSettings(c => ({ ...c, [key]: Number(value) })); setSaved(false); };
+  const saveSettings = () => {
+    fetch('http://localhost:3002/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cpuWarn:       settings.cpuWarning,
+        cpuCrit:       settings.cpuCritical,
+        memWarn:       settings.memoryWarning,
+        memCrit:       settings.memoryCritical,
+        agentTimeoutMs: settings.agentOfflineTimeout * 1000,
+      }),
+    })
+      .then(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); })
+      .catch(() => { setSaved(true); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = setTimeout(() => setSaved(false), 2200); });
   };
-
-  const toBackendConfig = (nextSettings) => ({
-    cpuWarn: nextSettings.cpuWarning,
-    cpuCrit: nextSettings.cpuCritical,
-    memWarn: nextSettings.memoryWarning,
-    memCrit: nextSettings.memoryCritical,
-    agentTimeoutMs: nextSettings.agentOfflineTimeout * 1000,
-  });
-
-  const showSavedMessage = () => {
-    setSaved(true);
-    if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = window.setTimeout(() => setSaved(false), 2200);
-  };
-
-  const saveSettings = async () => {
-    setSaving(true);
-    setError("");
-    setSaved(false);
-
-    try {
-      const response = await fetch('http://localhost:3002/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(toBackendConfig(settings)),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to save monitoring configuration');
-
-      setSettings({
-        cpuWarning: data.cpuWarn,
-        cpuCritical: data.cpuCrit,
-        memoryWarning: data.memWarn,
-        memoryCritical: data.memCrit,
-        agentOfflineTimeout: Math.round(data.agentTimeoutMs / 1000),
-      });
-      showSavedMessage();
-    } catch (err) {
-      setError(err.message || 'Failed to save monitoring configuration');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const resetDefaults = async () => {
-    setSaving(true);
-    setError("");
-    setSaved(false);
-
-    try {
-      const response = await fetch('http://localhost:3002/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(toBackendConfig(DEFAULT_CONFIG)),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to reset monitoring configuration');
-
-      setSettings({
-        cpuWarning: data.cpuWarn,
-        cpuCritical: data.cpuCrit,
-        memoryWarning: data.memWarn,
-        memoryCritical: data.memCrit,
-        agentOfflineTimeout: Math.round(data.agentTimeoutMs / 1000),
-      });
-      showSavedMessage();
-    } catch (err) {
-      setError(err.message || 'Failed to reset monitoring configuration');
-    } finally {
-      setSaving(false);
-    }
-  };
+  const resetDefaults = () => { setSettings(DEFAULT_CONFIG); setSaved(false); };
 
   const thresholdFields = [
     { key: "cpuWarning",          label: "CPU Warning Threshold",          description: "Warn when container CPU usage crosses this percentage.",              severity: "warning"  },
@@ -2031,13 +1952,13 @@ function ConfigPage({ onBack }) {
           <ChevronLeft size={12} /> BACK
         </button>
         <div style={{ fontFamily: sans, fontSize: 18, fontWeight: 700, color: C.textBright }}>Configuration</div>
-        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>BACKEND CONNECTED</Mono>
+        <Mono size={10} color={C.textDim} style={{ marginLeft: "auto" }}>LOCAL SETTINGS ONLY</Mono>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}>
         <Panel title="Threshold Settings" icon={Settings}>
           <div style={{ padding: "18px" }}>
-            {loading ? <Loading /> : <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ display: "grid", gap: 14 }}>
               {thresholdFields.map(field => (
                 <div key={field.key} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
@@ -2052,7 +1973,7 @@ function ConfigPage({ onBack }) {
                   </div>
                 </div>
               ))}
-            </div>}
+            </div>
           </div>
         </Panel>
 
@@ -2060,15 +1981,12 @@ function ConfigPage({ onBack }) {
           <Panel title="Actions" icon={Play}>
             <div style={{ padding: "18px" }}>
               <Label>Save Config</Label>
-              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>Update backend monitoring thresholds used by alerting and the agent watchdog.</div>
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>Store the current thresholds in component state for this session.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <button onClick={saveSettings} disabled={loading || saving} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: loading || saving ? "not-allowed" : "pointer", opacity: loading || saving ? 0.6 : 1, letterSpacing: "0.05em" }}>{saving ? "SAVING…" : "SAVE SETTINGS"}</button>
-                <button onClick={resetDefaults} disabled={loading || saving} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: loading || saving ? "not-allowed" : "pointer", opacity: loading || saving ? 0.6 : 1, letterSpacing: "0.05em" }}>RESET DEFAULTS</button>
+                <button onClick={saveSettings} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.cyan}`, background: `${C.cyan}18`, color: C.cyan, borderRadius: 5, fontFamily: mono, fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: "0.05em" }}>SAVE SETTINGS</button>
+                <button onClick={resetDefaults} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", border: `1px solid ${C.border2}`, background: "transparent", color: C.text, borderRadius: 5, fontFamily: mono, fontSize: 10, cursor: "pointer", letterSpacing: "0.05em" }}>RESET DEFAULTS</button>
               </div>
-              <div style={{ minHeight: 18, marginTop: 10 }}>
-                {saved && <Mono size={9} color={C.green}>SETTINGS SAVED TO BACKEND</Mono>}
-                {error && <Mono size={9} color={C.red}>{error}</Mono>}
-              </div>
+              <div style={{ minHeight: 18, marginTop: 10 }}>{saved && <Mono size={9} color={C.green}>SETTINGS SAVED LOCALLY</Mono>}</div>
             </div>
           </Panel>
 
@@ -2481,7 +2399,14 @@ export default function Dashboard() {
   const { stats, loading: ls }           = useStats();
   const { scans, loading: lsc }          = useScanHistory(socket);
   const faultStatus                      = useFaultStatus(socket);
-  const llmAnalyses                      = useLLMAnalyses(socket);
+  const llmAnalyses = useLLMAnalyses(socket);
+  const llmAnalysesLen = llmAnalyses.length;
+  useEffect(() => {
+    if (llmAnalysesLen > 0) {
+      sessionStorage.removeItem('llmDismissed');
+      setLlmDismissed(false);
+    }
+  }, [llmAnalysesLen]);
 
   const dismissToast = (id) => {
     if (toastTimersRef.current[id]) { clearTimeout(toastTimersRef.current[id]); delete toastTimersRef.current[id]; }
@@ -2528,6 +2453,12 @@ export default function Dashboard() {
   const [secrets, setSecrets]               = useState([]);
   const [secretsLoading, setSecretsLoading] = useState(false);
   const [secretsScanned, setSecretsScanned] = useState(false);
+  const [llmDismissed, setLlmDismissed] = useState(() => sessionStorage.getItem('llmDismissed') === 'true');
+
+  const dismissLlm = () => {
+    sessionStorage.setItem('llmDismissed', 'true');
+    setLlmDismissed(true);
+  };
 
   const runSecretsScan = () => {
     setSecretsLoading(true);
@@ -2753,7 +2684,7 @@ export default function Dashboard() {
   function renderPage() {
     switch (activeNav) {
       case "dashboard":
-        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} threats={threats} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} faultStatus={faultStatus} llmAnalyses={llmAnalyses} />;
+        return <DashboardPage containers={containers} vulnerabilities={vulnerabilities} alerts={alerts} acknowledgeAll={acknowledgeAll} acknowledge={acknowledge} threats={threats} scans={scans} compliance={compliance} stats={stats} ls={ls} lv={lv} lcont={lcont} la={la} lcomp={lcomp} lsc={lsc} onNav={setActiveNav} faultStatus={faultStatus} llmAnalyses={llmAnalyses} llmDismissed={llmDismissed} onLlmDismiss={dismissLlm} />;
       case "compliance":
         return <CompliancePage compliance={compliance} loading={lcomp} onBack={() => setActiveNav("dashboard")} />;
       case "alerts":
@@ -2801,7 +2732,7 @@ export default function Dashboard() {
           onAcknowledgeAll={acknowledgeAll}
         />
         <FaultBanner faultStatus={faultStatus} />
-        {llmAnalyses.length > 0 && activeNav === 'monitor' && <div style={{ padding: "0 28px", marginTop: 16 }}><LLMAnalysisPanel analyses={llmAnalyses} /></div>}
+        {llmAnalyses.length > 0 && !llmDismissed && activeNav === 'monitor' && <div style={{ padding: "0 28px", marginTop: 16 }}><LLMAnalysisPanel analyses={llmAnalyses} onDismiss={dismissLlm} /></div>}
         {renderPage()}
         <ToastNotifications toasts={toasts} onClose={dismissToast} />
       </div>

@@ -1,7 +1,7 @@
 version: '3.8'
 
 # ─────────────────────────────────────────────
-# ContainerShield — Distributed Monitoring Stack
+# Citadel — Distributed Monitoring Stack
 #
 # Starts:
 #   - central backend (aggregates all agent reports)
@@ -38,6 +38,7 @@ services:
       - AGENT_LABEL=Host-Primary
       - BACKEND_URL=http://backend:3002
       - REPORT_INTERVAL=10000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -55,6 +56,7 @@ services:
       - AGENT_LABEL=Host-Secondary
       - BACKEND_URL=http://backend:3002
       - REPORT_INTERVAL=10000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
